@@ -4,7 +4,11 @@
 
 Compares UCA, Standing Cross, ULA, and Cylinder microphone array geometries
 for direction-of-arrival estimation (azimuth + elevation) under varying
-reverberation, SNR, and diffuse noise conditions in a 3D exhibition hall.
+reverberation, drone SPL, and diffuse noise conditions in a 3D exhibition hall.
+
+Source levels are specified in dB SPL at 1 m (referenced to 20 uPa) via the
+shared acoustic_utils module, matching sim_server.py so batch and live
+simulators use an identical physical model.
 
 Usage:
     python run_comparison.py              # full sweep (~1816 trials, ~3.5-4 hrs)
@@ -16,13 +20,50 @@ import argparse
 import csv
 import json
 import pathlib
-import sys
 import time
 
 import numpy as np
 import pyroomacoustics as pra
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from acoustic_utils import (
+    air_absorption_kwargs,
+    apply_crosstalk,
+    apply_crosstalk_fir,
+    atmospheric_z_bias,
+    build_materials,
+    crowd_positions_mixed,
+    feature_snr_db as _feature_snr_db,
+    load_crosstalk_fir,
+    log_mel_features,
+    measure_rt60_from_rir,
+    ml_path_quantize_audio,
+    ml_path_quantize_features,
+    ml_path_snr_db as _ml_path_snr_db,
+    spl_to_amplitude,
+    synthesize_diffuse_crowd_plane_waves,
+    wall_adjacent_positions,
+    CROSSTALK_COUPLING_DB_DEFAULT,
+    CROWD_SPL_DB,
+    EXHIBITION_HALL_MATERIALS,
+    MIC_NOISE_FLOOR_DB,
+    ML_DEFAULT_BIT_DEPTH,
+    ML_DEFAULT_FEATURE_BIT_DEPTH,
+    ML_DEFAULT_N_MELS,
+    PA_SPL_DB,
+)
+
+FS = 16_000
+NFFT = 1024
+HOP = 512
+FMIN = 200.0
+FMAX = 2000.0
+C = 343.0
 
 SIGNAL_SECONDS = 1.0
+WARMUP_SAMPLES = int(0.1 * FS)  # 100 ms warm-up trimmed after room.simulate()
 ROOM_DIM = np.array([20.0, 15.0, 10.0])
 ARRAY_CENTER = np.array([10.0, 7.5, 1.0])
 SOURCE_DISTANCE = 4.0
@@ -34,10 +75,10 @@ GEO_COLORS = {"UCA": "C0", "CROSS": "C1", "ULA": "C2", "CYLINDER": "C3"}
 GEO_MARKERS = {"UCA": "o", "CROSS": "^", "ULA": "s", "CYLINDER": "D"}
 
 RT60S_FULL = [0.0, 0.5, 0.8, 1.0, 1.5]
-SNRS_FULL = [20.0, 10.0, 5.0, 0.0, -5.0]
+DRONE_SPLS_FULL = [85.0, 80.0, 78.0, 75.0, 70.0]
 DEFAULT_EL = 30.0
 DEFAULT_AZ = 60.0
-DEFAULT_SNR = 10.0
+DEFAULT_DRONE_SPL = 78.0
 DEFAULT_RT60_REV = 1.0
 ELEVATIONS_SWEEP = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0]
 AZIMUTHS_FULL = np.arange(0, 360, 10, dtype=float)
@@ -46,16 +87,50 @@ SEEDS_FULL = [0, 1]
 SRP_AZ = np.linspace(0, 2 * np.pi, 72, endpoint=False)
 SRP_COLAT = np.linspace(0, np.pi, 19)
 
-PA_POSITIONS = [[2.0, 2.0, 9.0], [18.0, 2.0, 9.0],
-                [2.0, 13.0, 9.0], [18.0, 13.0, 9.0]]
 OUT = pathlib.Path("results")
 CSV_PATH = OUT / "metrics.csv"
 SPECTRA_PATH = OUT / "spectra.json"
 CSV_FIELDS = [
-    "geometry", "rt60", "snr_db", "diffuse",
+    "geometry", "rt60", "drone_spl_db", "diffuse",
     "true_az_deg", "true_el_deg", "est_az_deg", "est_el_deg",
     "az_error_deg", "el_error_deg", "total_error_deg", "seed",
+    # Phase 3: populated when --ml-preview is passed; empty otherwise.
+    "ml_path_snr_db", "feature_snr_db",
 ]
+
+# Materials-profile mode -- set by --materials-profile on the CLI.
+# When not None, run_single_trial uses per-wall materials instead of
+# inverse_sabine, CSV_PATH and SPECTRA_PATH are redirected to
+# *_materials.csv / *_materials.json, and plot output filenames are
+# suffixed with "_materials".
+MATERIALS_PROFILE = None
+MATERIALS_PROFILE_RT60 = None  # measured RT60 of the profile (populated in main)
+PLOT_SUFFIX = ""
+
+# Atmosphere (Phase 2b) -- set by --temperature / --humidity / --temp-gradient
+# CLI flags. Defaults match the pra air-absorption defaults used in earlier
+# phases so existing sweeps are unaffected.
+#
+# NOTE: moving source is deliberately *not* added to the batch sweep. The
+# live simulator exposes it for what-if exploration; the batch path ranks
+# geometries under static-source conditions so runs stay apples-to-apples.
+TEMPERATURE_C = 20.0
+HUMIDITY_PCT = 50.0
+TEMP_GRADIENT_C_PER_M = 0.0
+
+# Phase 3 batch knobs -- all default to the Phase 2b baseline so unmodified
+# sweeps stay apples-to-apples. Overridden by the --ml-preview /
+# --crowd-model / --crosstalk-model CLI flags in main().
+CROWD_MODEL = "point_source"            # "point_source" | "plane_wave"
+N_PLANE_WAVES = 64
+CROSSTALK_MODEL = "simple"              # "simple" | "fir_capacitive"
+CROSSTALK_CORNER_HZ = 500.0
+CROSSTALK_COUPLING_DB = CROSSTALK_COUPLING_DB_DEFAULT
+CROSSTALK_FIR_PATH = ""
+ML_PREVIEW = False
+ML_BIT_DEPTH = ML_DEFAULT_BIT_DEPTH
+ML_FEATURE_BIT_DEPTH = ML_DEFAULT_FEATURE_BIT_DEPTH
+ML_N_MELS = ML_DEFAULT_N_MELS
 
 
 # ─── Helper functions ─────────────────────────────────────────────────────────
@@ -94,27 +169,6 @@ def drone_position(center, az_deg, el_deg, distance, room_dim, margin=MARGIN):
         center[2] + distance * np.sin(el),
     ])
     return np.clip(src, margin, room_dim - margin)
-
-
-def perimeter_positions_3d(room_dim, n, z_height, margin=0.5):
-    positions = []
-    lx = room_dim[0] - 2 * margin
-    ly = room_dim[1] - 2 * margin
-    perimeter = 2 * (lx + ly)
-    spacing = perimeter / n
-    for i in range(n):
-        d = i * spacing
-        if d < lx:
-            positions.append([margin + d, margin, z_height])
-        elif d < lx + ly:
-            positions.append([room_dim[0] - margin, margin + (d - lx), z_height])
-        elif d < 2 * lx + ly:
-            positions.append([room_dim[0] - margin - (d - lx - ly),
-                              room_dim[1] - margin, z_height])
-        else:
-            positions.append([margin,
-                              room_dim[1] - margin - (d - 2 * lx - ly), z_height])
-    return positions
 
 
 # ─── Geometry builders ────────────────────────────────────────────────────────
@@ -172,54 +226,170 @@ def build_geometry(name, center):
 
 # ─── Diffuse source builder ──────────────────────────────────────────────────
 
-def make_diffuse_sources_3d(room_dim, fs, seconds, rng):
+def make_diffuse_sources_3d(room_dim, fs, seconds, rng, array_center):
+    """Build (position, signal) pairs for the diffuse noise bed.
+
+    Uses the shared placement helpers so batch and live simulators agree,
+    and scales synthetic noise by dB SPL at 1 m so the mic sees physically
+    meaningful Pascal-unit pressure.
+    """
     sources = []
-    n_samples = int(fs * seconds)
-    for pos in perimeter_positions_3d(room_dim, 12, z_height=1.2, margin=0.5):
-        sig = rng.standard_normal(n_samples) * 0.3
+    n_samples = int(fs * seconds) + WARMUP_SAMPLES
+    for pos in crowd_positions_mixed(room_dim, 12, z_height=1.2,
+                                      array_center=array_center, rng=rng):
+        sig = rng.standard_normal(n_samples) * spl_to_amplitude(CROWD_SPL_DB)
         sources.append((np.array(pos), sig))
-    for pos in PA_POSITIONS:
-        sig = rng.standard_normal(n_samples) * 0.2
+    for pos in wall_adjacent_positions(room_dim, 4, z_height=room_dim[2] - 1.0,
+                                        rng=rng):
+        sig = rng.standard_normal(n_samples) * spl_to_amplitude(PA_SPL_DB)
         sources.append((np.array(pos, dtype=float), sig))
     return sources
 
 
 # ─── Single trial ─────────────────────────────────────────────────────────────
 
-def run_single_trial(array_R, true_az_deg, true_el_deg, rt60, snr_db,
-                     room_dim, diffuse=False, seed=0):
+def run_single_trial(array_R, true_az_deg, true_el_deg, rt60, drone_spl_db,
+                     room_dim, diffuse=False, seed=0,
+                     materials_profile=None,
+                     temperature_c=None, humidity_pct=None,
+                     temp_gradient_c_per_m=None,
+                     crowd_model=None, n_plane_waves=None,
+                     crosstalk_model=None, crosstalk_corner_hz=None,
+                     crosstalk_coupling_db=None, crosstalk_fir_path=None,
+                     ml_preview=None, ml_bit_depth=None,
+                     ml_feature_bit_depth=None, ml_n_mels=None):
+    """Run one static-source batch trial.
+
+    Atmosphere parameters default to the module-level ``TEMPERATURE_C``,
+    ``HUMIDITY_PCT``, ``TEMP_GRADIENT_C_PER_M`` globals (set by the
+    ``--temperature`` / ``--humidity`` / ``--temp-gradient`` CLI flags in
+    ``main``). Phase 3 parameters (crowd model, crosstalk model, ML preview)
+    similarly default to module-level globals set by CLI flags so unchanged
+    sweeps produce unchanged CSVs.
+    """
+    temperature_c = (TEMPERATURE_C if temperature_c is None else float(temperature_c))
+    humidity_pct = (HUMIDITY_PCT if humidity_pct is None else float(humidity_pct))
+    temp_gradient_c_per_m = (TEMP_GRADIENT_C_PER_M if temp_gradient_c_per_m is None
+                             else float(temp_gradient_c_per_m))
+
+    crowd_model = (CROWD_MODEL if crowd_model is None else str(crowd_model))
+    n_plane_waves = (N_PLANE_WAVES if n_plane_waves is None else int(n_plane_waves))
+    crosstalk_model = (CROSSTALK_MODEL if crosstalk_model is None
+                       else str(crosstalk_model))
+    crosstalk_corner_hz = (CROSSTALK_CORNER_HZ if crosstalk_corner_hz is None
+                           else float(crosstalk_corner_hz))
+    crosstalk_coupling_db = (CROSSTALK_COUPLING_DB if crosstalk_coupling_db is None
+                             else float(crosstalk_coupling_db))
+    crosstalk_fir_path = (CROSSTALK_FIR_PATH if crosstalk_fir_path is None
+                          else str(crosstalk_fir_path))
+    ml_preview = (ML_PREVIEW if ml_preview is None else bool(ml_preview))
+    ml_bit_depth = (ML_BIT_DEPTH if ml_bit_depth is None else int(ml_bit_depth))
+    ml_feature_bit_depth = (ML_FEATURE_BIT_DEPTH if ml_feature_bit_depth is None
+                            else int(ml_feature_bit_depth))
+    ml_n_mels = (ML_N_MELS if ml_n_mels is None else int(ml_n_mels))
+
     rng = np.random.default_rng(seed)
 
-    sigma2 = 10.0 ** (-snr_db / 10.0) / (4.0 * np.pi * SOURCE_DISTANCE) ** 2
+    sigma2 = spl_to_amplitude(MIC_NOISE_FLOOR_DB) ** 2
+    air_kw = air_absorption_kwargs(temperature_c, humidity_pct)
 
-    if rt60 <= 0.0:
+    if materials_profile == "exhibition_hall":
+        mats = build_materials(**EXHIBITION_HALL_MATERIALS)
+        room = pra.ShoeBox(
+            room_dim, fs=FS, sigma2_awgn=sigma2,
+            materials=mats, max_order=min(6, MAX_ORDER_CAP),
+            **air_kw,
+        )
+    elif rt60 <= 0.0:
         room = pra.AnechoicRoom(3, fs=FS, sigma2_awgn=sigma2)
     else:
         try:
             e_absorption, max_order = pra.inverse_sabine(rt60, room_dim)
         except ValueError:
-            return None, None, None, None, None
+            return None, None, None, None, None, None, None
         max_order = min(max_order, MAX_ORDER_CAP)
         room = pra.ShoeBox(
             room_dim, fs=FS, sigma2_awgn=sigma2,
             materials=pra.Material(e_absorption),
             max_order=max_order,
+            **air_kw,
         )
 
     src_pos = drone_position(ARRAY_CENTER, true_az_deg, true_el_deg,
                              SOURCE_DISTANCE, room_dim)
-    room.add_source(src_pos, signal=drone_like_signal(FS, SIGNAL_SECONDS, rng))
+    # Apply first-order gradient beam-bending by shifting the source
+    # position in z; pyroomacoustics then produces a RIR that reflects
+    # the bent arrival. At dT/dz = 0 this is a no-op.
+    src_pos = atmospheric_z_bias(src_pos, ARRAY_CENTER, temp_gradient_c_per_m)
+    src_pos = np.clip(src_pos, MARGIN, np.asarray(room_dim) - MARGIN)
+    # Include the warm-up pad in the source signal so we can trim 100 ms
+    # of RIR onset artefacts from the mic signals without eating into the
+    # 1-second integration window.
+    n_src = int(FS * SIGNAL_SECONDS) + WARMUP_SAMPLES
+    drone_sig = drone_like_signal(FS, n_src / FS, rng) * spl_to_amplitude(drone_spl_db)
+    room.add_source(src_pos, signal=drone_sig)
 
+    # Phase 3B: optional plane-wave crowd replaces the point-source crowd
+    # component of the diffuse bed (PA sources stay as point sources since
+    # they are localised and directional).
+    plane_wave_crowd_sources = None
     if diffuse:
-        for pos, sig in make_diffuse_sources_3d(room_dim, FS, SIGNAL_SECONDS, rng):
-            room.add_source(pos, signal=sig)
+        if crowd_model == "plane_wave":
+            # PA as point sources; crowd deferred to plane-wave synthesis
+            # after simulate(). We reuse make_diffuse_sources_3d's PA-tail
+            # placement by only pulling the PA half here.
+            n_samples_sim = int(FS * SIGNAL_SECONDS) + WARMUP_SAMPLES
+            for pos in wall_adjacent_positions(room_dim, 4,
+                                               z_height=room_dim[2] - 1.0,
+                                               rng=rng):
+                sig = rng.standard_normal(n_samples_sim) * spl_to_amplitude(PA_SPL_DB)
+                room.add_source(np.array(pos, dtype=float), signal=sig)
+            n_plane_src = max(int(n_plane_waves), 12)
+            plane_wave_crowd_sources = [
+                rng.standard_normal(int(FS * SIGNAL_SECONDS))
+                * spl_to_amplitude(CROWD_SPL_DB)
+                for _ in range(n_plane_src)
+            ]
+        else:
+            for pos, sig in make_diffuse_sources_3d(room_dim, FS, SIGNAL_SECONDS,
+                                                     rng, ARRAY_CENTER):
+                room.add_source(pos, signal=sig)
 
     room.add_microphone_array(pra.MicrophoneArray(array_R, fs=FS))
     room.simulate()
 
+    mic_signals = room.mic_array.signals[:, WARMUP_SAMPLES:]
+
+    # Phase 3B: add plane-wave crowd field directly to mic signals.
+    if plane_wave_crowd_sources is not None:
+        diffuse_pw = synthesize_diffuse_crowd_plane_waves(
+            array_R,
+            duration_s=float(mic_signals.shape[1]) / FS,
+            fs=FS,
+            n_planes=int(n_plane_waves),
+            source_signals=plane_wave_crowd_sources,
+            rng=rng,
+        )
+        n = min(mic_signals.shape[1], diffuse_pw.shape[1])
+        mic_signals = mic_signals.copy()
+        mic_signals[:, :n] = mic_signals[:, :n] + diffuse_pw[:, :n]
+
+    # Phase 3C: optional FIR crosstalk. Only applied when crosstalk_model
+    # is set to "fir_capacitive"; the legacy batch sweep (crosstalk_model
+    # == "simple" and CROSSTALK_COUPLING_DB default not forced-on) leaves
+    # signals untouched.
+    if crosstalk_model == "fir_capacitive":
+        measured = load_crosstalk_fir(crosstalk_fir_path)
+        mic_signals = apply_crosstalk_fir(
+            mic_signals, FS,
+            coupling_db=crosstalk_coupling_db,
+            corner_hz=crosstalk_corner_hz,
+            measured_fir=measured,
+        )
+
     X = np.array([
         pra.transform.stft.analysis(sig, NFFT, HOP).T
-        for sig in room.mic_array.signals
+        for sig in mic_signals
     ])
 
     df = FS / NFFT
@@ -240,51 +410,93 @@ def run_single_trial(array_R, true_az_deg, true_el_deg, rt60, snr_db,
     grid_colat = np.array(doa.grid.colatitude, copy=True)
     grid_vals = np.array(doa.grid.values, copy=True)
 
-    return est_az_deg, est_el_deg, grid_az, grid_colat, grid_vals
+    # Phase 3A: optional MAX78000 ML-path preview metrics. We beamform
+    # toward the estimated DOA, quantize to int8/int16, and report the
+    # SNR hit on audio + log-mel features. Cheap enough to enable for a
+    # single-environment sweep (<5% overhead per trial).
+    ml_snr = None
+    feat_snr = None
+    if ml_preview:
+        el_rad = np.deg2rad(est_el_deg)
+        colat = np.pi / 2 - el_rad
+        d = np.array([
+            np.sin(colat) * np.cos(est_az_rad),
+            np.sin(colat) * np.sin(est_az_rad),
+            np.cos(colat),
+        ])
+        center = array_R.mean(axis=1)
+        delays = (array_R - center[:, None]).T @ d / C
+        delays -= delays.min()
+        n_out = mic_signals.shape[1]
+        bf_audio = np.zeros(n_out, dtype=np.float64)
+        for m in range(mic_signals.shape[0]):
+            shift = int(round(delays[m] * FS))
+            if shift >= n_out:
+                continue
+            bf_audio[shift:] += mic_signals[m, :n_out - shift]
+        bf_audio /= mic_signals.shape[0]
+
+        q_audio = ml_path_quantize_audio(bf_audio, bit_depth=ml_bit_depth)
+        ml_snr = float(round(_ml_path_snr_db(bf_audio, q_audio), 2))
+
+        mel_ref = log_mel_features(bf_audio, fs=FS, n_mels=ml_n_mels)
+        mel_q = log_mel_features(q_audio, fs=FS, n_mels=ml_n_mels)
+        mel_q = ml_path_quantize_features(mel_q, bit_depth=ml_feature_bit_depth)
+        feat_snr = float(round(_feature_snr_db(mel_ref, mel_q), 2))
+
+    return est_az_deg, est_el_deg, grid_az, grid_colat, grid_vals, ml_snr, feat_snr
 
 
 # ─── Trial list builder ──────────────────────────────────────────────────────
 
-def build_trial_list(test_mode=False):
+def build_trial_list(test_mode=False, materials_profile=None,
+                     materials_rt60=None):
     if test_mode:
         azimuths = np.array([0, 60, 90, 180, 270], dtype=float)
         rt60s = [0.0, 1.0]
-        snrs = [10.0, 0.0]
+        drone_spls = [80.0, 70.0]
         elevations_sweep = [20.0, 50.0]
         seeds = [0]
     else:
         azimuths = AZIMUTHS_FULL
         rt60s = RT60S_FULL
-        snrs = SNRS_FULL
+        drone_spls = DRONE_SPLS_FULL
         elevations_sweep = ELEVATIONS_SWEEP
         seeds = SEEDS_FULL
+
+    if materials_profile is not None:
+        # Single-environment sweep: one measured RT60 bucket for the
+        # selected materials profile. Faster, and the plots collapse the
+        # rt60 axis to a single bin.
+        rt60s = [float(materials_rt60 if materials_rt60 is not None else 0.0)]
 
     seen = set()
     trials = []
 
-    def _add(rt60, snr_db, diffuse, az, el, seed):
-        key = (rt60, snr_db, diffuse, az, el, seed)
+    def _add(rt60, drone_spl_db, diffuse, az, el, seed):
+        key = (rt60, drone_spl_db, diffuse, az, el, seed)
         if key not in seen:
             seen.add(key)
-            trials.append(dict(rt60=rt60, snr_db=snr_db, diffuse=diffuse,
+            trials.append(dict(rt60=rt60, drone_spl_db=drone_spl_db,
+                               diffuse=diffuse,
                                true_az_deg=az, true_el_deg=el, seed=seed))
 
     for rt60 in rt60s:
         for az in azimuths:
             for seed in seeds:
-                _add(rt60, DEFAULT_SNR, False, float(az), DEFAULT_EL, seed)
+                _add(rt60, DEFAULT_DRONE_SPL, False, float(az), DEFAULT_EL, seed)
 
     for el in elevations_sweep:
         for seed in seeds:
-            _add(DEFAULT_RT60_REV, DEFAULT_SNR, False, DEFAULT_AZ, el, seed)
+            _add(DEFAULT_RT60_REV, DEFAULT_DRONE_SPL, False, DEFAULT_AZ, el, seed)
 
-    for snr in snrs:
+    for spl in drone_spls:
         for seed in seeds:
-            _add(DEFAULT_RT60_REV, snr, False, DEFAULT_AZ, DEFAULT_EL, seed)
+            _add(DEFAULT_RT60_REV, spl, False, DEFAULT_AZ, DEFAULT_EL, seed)
 
     for az in azimuths:
         for seed in seeds:
-            _add(DEFAULT_RT60_REV, 5.0, True, float(az), DEFAULT_EL, seed)
+            _add(DEFAULT_RT60_REV, 70.0, True, float(az), DEFAULT_EL, seed)
 
     return trials
 
@@ -299,7 +511,7 @@ def load_completed(csv_path):
     with open(p, "r", newline="") as f:
         for r in csv.DictReader(f):
             done.add((
-                r["geometry"], float(r["rt60"]), float(r["snr_db"]),
+                r["geometry"], float(r["rt60"]), float(r["drone_spl_db"]),
                 r["diffuse"] == "True", float(r["true_az_deg"]),
                 float(r["true_el_deg"]), int(r["seed"]),
             ))
@@ -323,7 +535,7 @@ def load_csv(csv_path):
             rows.append(dict(
                 geometry=r["geometry"],
                 rt60=float(r["rt60"]),
-                snr_db=float(r["snr_db"]),
+                drone_spl_db=float(r["drone_spl_db"]),
                 diffuse=r["diffuse"] == "True",
                 true_az_deg=float(r["true_az_deg"]),
                 true_el_deg=float(r["true_el_deg"]),
@@ -339,10 +551,12 @@ def load_csv(csv_path):
 
 # ─── Main simulation loop ────────────────────────────────────────────────────
 
-def run_all_trials(test_mode=False):
+def run_all_trials(test_mode=False, materials_profile=None,
+                   materials_rt60=None):
     OUT.mkdir(exist_ok=True)
     done = load_completed(CSV_PATH)
-    trial_list = build_trial_list(test_mode)
+    trial_list = build_trial_list(test_mode, materials_profile=materials_profile,
+                                  materials_rt60=materials_rt60)
     total = len(trial_list) * len(GEOMETRIES)
     spectra = []
 
@@ -362,19 +576,21 @@ def run_all_trials(test_mode=False):
 
         for trial in trial_list:
             idx += 1
-            key = (geo, trial["rt60"], trial["snr_db"], trial["diffuse"],
+            key = (geo, trial["rt60"], trial["drone_spl_db"], trial["diffuse"],
                    trial["true_az_deg"], trial["true_el_deg"], trial["seed"])
             if key in done:
                 continue
 
-            est_az, est_el, g_az, g_colat, g_vals = run_single_trial(
+            result = run_single_trial(
                 R, trial["true_az_deg"], trial["true_el_deg"],
-                trial["rt60"], trial["snr_db"], ROOM_DIM,
+                trial["rt60"], trial["drone_spl_db"], ROOM_DIM,
                 trial["diffuse"], trial["seed"],
+                materials_profile=materials_profile,
             )
-            if est_az is None:
+            if result is None or result[0] is None:
                 done.add(key)
                 continue
+            est_az, est_el, g_az, g_colat, g_vals, ml_snr, feat_snr = result
 
             az_err = abs(wrap_angle_deg(est_az - trial["true_az_deg"]))
             el_err = abs(est_el - trial["true_el_deg"])
@@ -384,7 +600,7 @@ def run_all_trials(test_mode=False):
             row = dict(
                 geometry=geo,
                 rt60=trial["rt60"],
-                snr_db=trial["snr_db"],
+                drone_spl_db=trial["drone_spl_db"],
                 diffuse=trial["diffuse"],
                 true_az_deg=round(trial["true_az_deg"], 4),
                 true_el_deg=round(trial["true_el_deg"], 4),
@@ -394,6 +610,8 @@ def run_all_trials(test_mode=False):
                 el_error_deg=round(el_err, 4),
                 total_error_deg=round(total_err, 4),
                 seed=trial["seed"],
+                ml_path_snr_db=("" if ml_snr is None else ml_snr),
+                feature_snr_db=("" if feat_snr is None else feat_snr),
             )
             append_row(CSV_PATH, row)
             done.add(key)
@@ -406,7 +624,7 @@ def run_all_trials(test_mode=False):
                 and (
                     (abs(trial["rt60"] - 1.0) < 1e-9
                      and not trial["diffuse"]
-                     and abs(trial["snr_db"] - DEFAULT_SNR) < 1e-9)
+                     and abs(trial["drone_spl_db"] - DEFAULT_DRONE_SPL) < 1e-9)
                     or trial["diffuse"]
                 )
             )
@@ -429,7 +647,7 @@ def run_all_trials(test_mode=False):
                     f"  [{idx}/{total}]  {rate:.2f} trials/s  "
                     f"~{remaining/60:.0f}min left  |  "
                     f"{geo:8s} rt60={trial['rt60']:.1f} "
-                    f"snr={trial['snr_db']:3.0f}dB {diff_tag}"
+                    f"drone={trial['drone_spl_db']:3.0f}dB {diff_tag}"
                     f"az={trial['true_az_deg']:5.0f} el={trial['true_el_deg']:4.0f}  "
                     f"err_az={az_err:.1f} err_el={el_err:.1f} err_tot={total_err:.1f}"
                 )
@@ -459,9 +677,9 @@ def _filter(rows, **kwargs):
 def _conditions_list():
     conds = []
     for rt60 in RT60S_FULL:
-        conds.append(dict(rt60=rt60, snr_db=DEFAULT_SNR, diffuse=False,
+        conds.append(dict(rt60=rt60, drone_spl_db=DEFAULT_DRONE_SPL, diffuse=False,
                           label="Anechoic" if rt60 == 0 else f"RT60={rt60:.1f}s"))
-    conds.append(dict(rt60=DEFAULT_RT60_REV, snr_db=5.0, diffuse=True,
+    conds.append(dict(rt60=DEFAULT_RT60_REV, drone_spl_db=70.0, diffuse=True,
                       label="Diffuse"))
     return conds
 
@@ -478,7 +696,8 @@ def plot_az_error_polar(rows):
         ax = axes_flat[ci]
         for geo in GEOMETRIES:
             subset = _filter(rows, geometry=geo, rt60=cond["rt60"],
-                             snr_db=cond["snr_db"], diffuse=cond["diffuse"])
+                             drone_spl_db=cond["drone_spl_db"],
+                             diffuse=cond["diffuse"])
             if not subset:
                 continue
             az_map = {}
@@ -498,7 +717,7 @@ def plot_az_error_polar(rows):
                bbox_to_anchor=(0.5, -0.02))
     fig.suptitle("Azimuth Error vs True Azimuth (deg)", fontsize=14, y=1.01)
     fig.tight_layout()
-    fig.savefig(OUT / "az_error_polar.png", dpi=150, bbox_inches="tight")
+    fig.savefig(OUT / f"az_error_polar{PLOT_SUFFIX}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("    az_error_polar.png")
 
@@ -508,7 +727,8 @@ def plot_az_error_polar(rows):
 def _error_heatmap_panel(ax, rows, cond, error_key):
     for gi, geo in enumerate(GEOMETRIES):
         subset = _filter(rows, geometry=geo, rt60=cond["rt60"],
-                         snr_db=cond["snr_db"], diffuse=cond["diffuse"])
+                         drone_spl_db=cond["drone_spl_db"],
+                         diffuse=cond["diffuse"])
         if not subset:
             continue
         az_map = {}
@@ -538,7 +758,7 @@ def plot_az_error_heatmap(rows):
         _error_heatmap_panel(axes_flat[ci], rows, cond, "az_error_deg")
     fig.suptitle("Azimuth Error Heatmap (geometry x azimuth)", fontsize=13)
     fig.tight_layout()
-    fig.savefig(OUT / "az_error_heatmap.png", dpi=150, bbox_inches="tight")
+    fig.savefig(OUT / f"az_error_heatmap{PLOT_SUFFIX}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("    az_error_heatmap.png")
 
@@ -555,7 +775,8 @@ def plot_el_error_polar(rows):
         ax = axes_flat[ci]
         for geo in GEOMETRIES:
             subset = _filter(rows, geometry=geo, rt60=cond["rt60"],
-                             snr_db=cond["snr_db"], diffuse=cond["diffuse"])
+                             drone_spl_db=cond["drone_spl_db"],
+                             diffuse=cond["diffuse"])
             if not subset:
                 continue
             az_map = {}
@@ -575,7 +796,7 @@ def plot_el_error_polar(rows):
                bbox_to_anchor=(0.5, -0.02))
     fig.suptitle("Elevation Error vs True Azimuth (deg)", fontsize=14, y=1.01)
     fig.tight_layout()
-    fig.savefig(OUT / "el_error_polar.png", dpi=150, bbox_inches="tight")
+    fig.savefig(OUT / f"el_error_polar{PLOT_SUFFIX}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("    el_error_polar.png")
 
@@ -590,7 +811,7 @@ def plot_el_error_heatmap(rows):
         _error_heatmap_panel(axes_flat[ci], rows, cond, "el_error_deg")
     fig.suptitle("Elevation Error Heatmap (geometry x azimuth)", fontsize=13)
     fig.tight_layout()
-    fig.savefig(OUT / "el_error_heatmap.png", dpi=150, bbox_inches="tight")
+    fig.savefig(OUT / f"el_error_heatmap{PLOT_SUFFIX}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("    el_error_heatmap.png")
 
@@ -600,7 +821,7 @@ def plot_el_error_heatmap(rows):
 def plot_performance_summary(rows):
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
 
-    non_diff = _filter(rows, diffuse=False, snr_db=DEFAULT_SNR)
+    non_diff = _filter(rows, diffuse=False, drone_spl_db=DEFAULT_DRONE_SPL)
     for geo in GEOMETRIES:
         geo_rows = _filter(non_diff, geometry=geo)
         rt60_map = {}
@@ -645,26 +866,26 @@ def plot_performance_summary(rows):
     ax2.set_ylim(0, 105)
     ax2.grid(True, axis="y", alpha=0.3)
 
-    snr_rows = _filter(rows, rt60=DEFAULT_RT60_REV, diffuse=False)
+    spl_rows = _filter(rows, rt60=DEFAULT_RT60_REV, diffuse=False)
     for geo in GEOMETRIES:
-        geo_rows = _filter(snr_rows, geometry=geo)
-        snr_map = {}
+        geo_rows = _filter(spl_rows, geometry=geo)
+        spl_map = {}
         for r in geo_rows:
-            snr_map.setdefault(r["snr_db"], []).append(r["total_error_deg"])
-        snrs = sorted(snr_map)
-        if not snrs:
+            spl_map.setdefault(r["drone_spl_db"], []).append(r["total_error_deg"])
+        spls = sorted(spl_map)
+        if not spls:
             continue
-        means = [np.mean(snr_map[s]) for s in snrs]
-        ax3.plot(snrs, means, "o-", label=geo, color=GEO_COLORS[geo], linewidth=2)
-    ax3.set_xlabel("SNR (dB)")
+        means = [np.mean(spl_map[s]) for s in spls]
+        ax3.plot(spls, means, "o-", label=geo, color=GEO_COLORS[geo], linewidth=2)
+    ax3.set_xlabel("Drone SPL at 1 m (dB)")
     ax3.set_ylabel("Mean total error (deg)")
-    ax3.set_title("Total Angular Error vs SNR")
+    ax3.set_title("Total Angular Error vs Drone SPL")
     ax3.legend(fontsize=8)
     ax3.grid(True, alpha=0.3)
     ax3.set_ylim(bottom=0)
 
-    el_rows = _filter(rows, rt60=DEFAULT_RT60_REV, snr_db=DEFAULT_SNR,
-                      diffuse=False)
+    el_rows = _filter(rows, rt60=DEFAULT_RT60_REV,
+                      drone_spl_db=DEFAULT_DRONE_SPL, diffuse=False)
     for geo in GEOMETRIES:
         geo_rows = _filter(el_rows, geometry=geo)
         el_map = {}
@@ -687,7 +908,7 @@ def plot_performance_summary(rows):
     ax4.set_ylim(bottom=0)
 
     fig.tight_layout()
-    fig.savefig(OUT / "performance_summary.png", dpi=150, bbox_inches="tight")
+    fig.savefig(OUT / f"performance_summary{PLOT_SUFFIX}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("    performance_summary.png")
 
@@ -699,21 +920,24 @@ def plot_summary_heatmap(rows):
     labels = []
 
     for rt60 in RT60S_FULL:
-        conditions.append(dict(rt60=rt60, snr_db=DEFAULT_SNR, diffuse=False))
+        conditions.append(dict(rt60=rt60, drone_spl_db=DEFAULT_DRONE_SPL,
+                               diffuse=False))
         labels.append("Anechoic" if rt60 == 0 else f"RT60={rt60:.1f}")
 
-    for snr in [20.0, 5.0, 0.0, -5.0]:
-        conditions.append(dict(rt60=DEFAULT_RT60_REV, snr_db=snr, diffuse=False))
-        labels.append(f"SNR={int(snr)}")
+    for spl in [85.0, 75.0, 70.0]:
+        conditions.append(dict(rt60=DEFAULT_RT60_REV, drone_spl_db=spl,
+                               diffuse=False))
+        labels.append(f"Drone={int(spl)}dB")
 
-    conditions.append(dict(rt60=DEFAULT_RT60_REV, snr_db=5.0, diffuse=True))
+    conditions.append(dict(rt60=DEFAULT_RT60_REV, drone_spl_db=70.0, diffuse=True))
     labels.append("Diffuse")
 
     mat = np.full((len(GEOMETRIES), len(conditions)), np.nan)
     for j, cond in enumerate(conditions):
         for i, geo in enumerate(GEOMETRIES):
             group = _filter(rows, geometry=geo, rt60=cond["rt60"],
-                            snr_db=cond["snr_db"], diffuse=cond["diffuse"])
+                            drone_spl_db=cond["drone_spl_db"],
+                            diffuse=cond["diffuse"])
             if group:
                 mat[i, j] = np.mean([r["total_error_deg"] for r in group])
 
@@ -736,7 +960,7 @@ def plot_summary_heatmap(rows):
     ax.set_title("Mean Total Angular Error (deg) -- Geometry x Condition",
                  fontsize=12, pad=12)
     fig.colorbar(im, ax=ax, label="Mean error (deg)", shrink=0.9, pad=0.02)
-    fig.savefig(OUT / "summary_heatmap.png", dpi=150, bbox_inches="tight")
+    fig.savefig(OUT / f"summary_heatmap{PLOT_SUFFIX}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("    summary_heatmap.png")
 
@@ -800,7 +1024,7 @@ def plot_srp_spectra(spectra_list):
     fig.suptitle("SRP-PHAT Spatial Spectrum (azimuth slice at estimated elevation)",
                  fontsize=13)
     fig.tight_layout()
-    fig.savefig(OUT / "srp_spectra.png", dpi=150, bbox_inches="tight")
+    fig.savefig(OUT / f"srp_spectra{PLOT_SUFFIX}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("    srp_spectra.png")
 
@@ -814,7 +1038,12 @@ def plot_room_scene():
                                fill=False, edgecolor="black", linewidth=2)
     ax_top.add_patch(rect_top)
 
-    crowd_pos = perimeter_positions_3d(ROOM_DIM, 12, 1.2, 0.5)
+    # Illustrative crowd/PA layout: fixed seed so the diagram is stable.
+    viz_rng = np.random.default_rng(7)
+    crowd_pos = crowd_positions_mixed(ROOM_DIM, 12, z_height=1.2,
+                                       array_center=ARRAY_CENTER, rng=viz_rng)
+    pa_pos = wall_adjacent_positions(ROOM_DIM, 4, z_height=ROOM_DIM[2] - 1.0,
+                                      rng=viz_rng)
     cx_list = [p[0] for p in crowd_pos]
     cy_list = [p[1] for p in crowd_pos]
     ax_top.scatter(cx_list, cy_list, c="gray", s=30, marker="x", alpha=0.6,
@@ -857,10 +1086,10 @@ def plot_room_scene():
     ax_side.scatter(cx_list, [1.2] * len(cx_list), c="gray", s=30, marker="x",
                     alpha=0.6, label="Crowd (z=1.2 m)")
 
-    pa_x = [p[0] for p in PA_POSITIONS]
-    pa_z = [p[2] for p in PA_POSITIONS]
+    pa_x = [p[0] for p in pa_pos]
+    pa_z = [p[2] for p in pa_pos]
     ax_side.scatter(pa_x, pa_z, c="orange", s=60, marker="v", zorder=4,
-                    label="PA (z=9.0 m)")
+                    label=f"PA (z={ROOM_DIM[2] - 1.0:.1f} m)")
 
     ax_side.set_xlim(-0.5, ROOM_DIM[0] + 0.5)
     ax_side.set_ylim(-0.5, ROOM_DIM[2] + 0.5)
@@ -875,7 +1104,7 @@ def plot_room_scene():
 
     fig.suptitle("Exhibition Hall -- 3D Room Layout", fontsize=14)
     fig.tight_layout()
-    fig.savefig(OUT / "room_scene.png", dpi=150, bbox_inches="tight")
+    fig.savefig(OUT / f"room_scene{PLOT_SUFFIX}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("    room_scene.png")
 
@@ -908,6 +1137,25 @@ def generate_all_plots():
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+def _measure_profile_rt60(materials_profile):
+    """Run one throwaway RIR computation to get the measured RT60 of the
+    requested materials profile in the batch room geometry."""
+    if materials_profile != "exhibition_hall":
+        return None
+    mats = build_materials(**EXHIBITION_HALL_MATERIALS)
+    room = pra.ShoeBox(ROOM_DIM.tolist(), fs=FS,
+                       materials=mats, max_order=6,
+                       **air_absorption_kwargs(TEMPERATURE_C, HUMIDITY_PCT))
+    src = drone_position(ARRAY_CENTER, DEFAULT_AZ, DEFAULT_EL,
+                         SOURCE_DISTANCE, ROOM_DIM)
+    room.add_source(src, signal=np.zeros(100))
+    room.add_microphone_array(pra.MicrophoneArray(
+        ARRAY_CENTER.reshape(3, 1), fs=FS))
+    room.compute_rir()
+    rir = np.asarray(room.rir[0][0])
+    return measure_rt60_from_rir(rir, fs=FS, decay_db=20)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="3D DOA Geometry Comparison -- Exhibition Hall Simulation")
@@ -915,13 +1163,136 @@ def main():
                         help="Quick run with reduced parameter set (~160 trials)")
     parser.add_argument("--plots-only", action="store_true",
                         help="Regenerate plots from existing CSV")
+    parser.add_argument("--materials-profile", choices=["exhibition_hall"],
+                        default=None,
+                        help="Use per-wall materials instead of inverse_sabine. "
+                             "Writes metrics_materials.csv and *_materials.png plots.")
+    parser.add_argument("--temperature", type=float, default=None,
+                        metavar="C",
+                        help="Air temperature in Celsius for air absorption "
+                             "(Phase 2b). Default 20 C.")
+    parser.add_argument("--humidity", type=float, default=None,
+                        metavar="PCT",
+                        help="Relative humidity in %% for air absorption "
+                             "(Phase 2b). Default 50%%.")
+    parser.add_argument("--temp-gradient", type=float, default=None,
+                        metavar="CPERM",
+                        help="Vertical temperature gradient dT/dz in C/m for "
+                             "first-order beam-bending (Phase 2b). Default 0. "
+                             "Typical convention hall with ceiling lights: ~1.5.")
+    parser.add_argument("--crowd-model", choices=["point_source", "plane_wave"],
+                        default=None,
+                        help="Crowd-noise spatial correlation model (Phase 3). "
+                             "'point_source' keeps the legacy discrete crowd "
+                             "placement; 'plane_wave' synthesizes an isotropic "
+                             "diffuse field. Default point_source.")
+    parser.add_argument("--n-plane-waves", type=int, default=None, metavar="N",
+                        help="Number of plane waves for --crowd-model plane_wave "
+                             "(Phase 3). Default 64.")
+    parser.add_argument("--crosstalk-model", choices=["simple", "fir_capacitive"],
+                        default=None,
+                        help="Preamp/ADC crosstalk model (Phase 3). "
+                             "'simple' = flat neighbour leakage; 'fir_capacitive' "
+                             "= 1-pole HPF leakage path. Default simple.")
+    parser.add_argument("--crosstalk-corner-hz", type=float, default=None,
+                        metavar="HZ",
+                        help="Corner frequency for --crosstalk-model fir_capacitive "
+                             "(Phase 3). Default 500 Hz.")
+    parser.add_argument("--crosstalk-coupling-db", type=float, default=None,
+                        metavar="DB",
+                        help="Neighbour-channel voltage coupling ratio in dB when "
+                             "a FIR crosstalk model is active (Phase 3). Default -40 dB.")
+    parser.add_argument("--crosstalk-fir-path", type=str, default=None,
+                        metavar="PATH",
+                        help="Optional path to a measured crosstalk FIR "
+                             "(.json or .npz). When set, overrides the analytic "
+                             "HPF model.")
+    parser.add_argument("--ml-preview", action="store_true",
+                        help="Enable MAX78000 ML-path preview per trial (Phase 3). "
+                             "Adds ml_path_snr_db and feature_snr_db columns to "
+                             "the output CSV. Adds a few % overhead per trial.")
+    parser.add_argument("--ml-bit-depth", type=int, default=None,
+                        choices=[8, 16], metavar="BITS",
+                        help="Bit-depth for ML-path audio quantization "
+                             "(Phase 3). Default 8.")
+    parser.add_argument("--ml-feature-bit-depth", type=int, default=None,
+                        choices=[8, 16], metavar="BITS",
+                        help="Bit-depth for ML-path log-mel feature quantization "
+                             "(Phase 3). Default 8.")
+    parser.add_argument("--ml-n-mels", type=int, default=None, metavar="N",
+                        help="Number of mel bands for ML-path feature extractor "
+                             "(Phase 3). Default 64.")
     args = parser.parse_args()
+
+    global MATERIALS_PROFILE, MATERIALS_PROFILE_RT60, PLOT_SUFFIX
+    global CSV_PATH, SPECTRA_PATH, RT60S_FULL, DEFAULT_RT60_REV
+    global TEMPERATURE_C, HUMIDITY_PCT, TEMP_GRADIENT_C_PER_M
+    global CROWD_MODEL, N_PLANE_WAVES
+    global CROSSTALK_MODEL, CROSSTALK_CORNER_HZ, CROSSTALK_COUPLING_DB
+    global CROSSTALK_FIR_PATH
+    global ML_PREVIEW, ML_BIT_DEPTH, ML_FEATURE_BIT_DEPTH, ML_N_MELS
+
+    if args.temperature is not None:
+        TEMPERATURE_C = float(args.temperature)
+    if args.humidity is not None:
+        HUMIDITY_PCT = float(args.humidity)
+    if args.temp_gradient is not None:
+        TEMP_GRADIENT_C_PER_M = float(args.temp_gradient)
+    if (args.temperature is not None or args.humidity is not None
+            or args.temp_gradient is not None):
+        print(f"[atmosphere] T={TEMPERATURE_C:.1f} C  RH={HUMIDITY_PCT:.0f}%  "
+              f"dT/dz={TEMP_GRADIENT_C_PER_M:+.2f} C/m")
+
+    if args.crowd_model is not None:
+        CROWD_MODEL = str(args.crowd_model)
+    if args.n_plane_waves is not None:
+        N_PLANE_WAVES = int(args.n_plane_waves)
+    if args.crosstalk_model is not None:
+        CROSSTALK_MODEL = str(args.crosstalk_model)
+    if args.crosstalk_corner_hz is not None:
+        CROSSTALK_CORNER_HZ = float(args.crosstalk_corner_hz)
+    if args.crosstalk_coupling_db is not None:
+        CROSSTALK_COUPLING_DB = float(args.crosstalk_coupling_db)
+    if args.crosstalk_fir_path is not None:
+        CROSSTALK_FIR_PATH = str(args.crosstalk_fir_path)
+    if args.ml_preview:
+        ML_PREVIEW = True
+    if args.ml_bit_depth is not None:
+        ML_BIT_DEPTH = int(args.ml_bit_depth)
+    if args.ml_feature_bit_depth is not None:
+        ML_FEATURE_BIT_DEPTH = int(args.ml_feature_bit_depth)
+    if args.ml_n_mels is not None:
+        ML_N_MELS = int(args.ml_n_mels)
+
+    if CROWD_MODEL != "point_source" or CROSSTALK_MODEL != "simple" or ML_PREVIEW:
+        print(f"[phase3] crowd_model={CROWD_MODEL}  "
+              f"crosstalk_model={CROSSTALK_MODEL}  "
+              f"ml_preview={'ON' if ML_PREVIEW else 'off'}")
+
+    if args.materials_profile:
+        MATERIALS_PROFILE = args.materials_profile
+        PLOT_SUFFIX = f"_{args.materials_profile}"
+        CSV_PATH = OUT / f"metrics{PLOT_SUFFIX}.csv"
+        SPECTRA_PATH = OUT / f"spectra{PLOT_SUFFIX}.json"
+        MATERIALS_PROFILE_RT60 = _measure_profile_rt60(args.materials_profile)
+        if MATERIALS_PROFILE_RT60 is None:
+            raise RuntimeError(f"Could not measure RT60 for profile {args.materials_profile}")
+        # Keep the full-precision value so _filter(rt60=...) matches the
+        # CSV rows exactly. Labels still render via "{rt60:.1f}" formatting.
+        RT60S_FULL = [float(MATERIALS_PROFILE_RT60)]
+        DEFAULT_RT60_REV = RT60S_FULL[0]
+        OUT.mkdir(exist_ok=True)
+        print(f"[materials-profile] {MATERIALS_PROFILE} "
+              f"measured RT60 = {MATERIALS_PROFILE_RT60:.2f} s")
+        print(f"[materials-profile] CSV -> {CSV_PATH}  plots -> *{PLOT_SUFFIX}.png")
 
     if args.plots_only:
         generate_all_plots()
         return
 
-    run_all_trials(test_mode=args.test)
+    run_all_trials(test_mode=args.test,
+                   materials_profile=MATERIALS_PROFILE,
+                   materials_rt60=MATERIALS_PROFILE_RT60)
     generate_all_plots()
 
 

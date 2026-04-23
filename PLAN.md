@@ -4,18 +4,41 @@
 
 Add a FastAPI backend that runs single-trial pyroomacoustics simulations on demand, and wire it into the existing `results/array_explorer.html` as a third "Live Simulation" mode. Includes realistic exhibition hall parameters, real audio samples, diffuse noise controls, mic imperfections, and beamformed audio playback.
 
-## Task List
+## Execution Phases
+
+The build is split into phases with verification checkpoints to catch issues early.
+
+### Phase 1 + 2: Foundation + Backend
 
 | # | Task | Owner | Status |
 |---|------|-------|--------|
-| 1 | Fix corrupted `run_comparison.py` (restore constants FS/NFFT/HOP/FMIN/FMAX/C + matplotlib import) | Agent | Pending |
-| 2 | Create `requirements.txt` | Agent | Pending |
-| 3 | Download drone recording (~15-30 sec, outdoor, hovering, close-up) and crowd ambience (~2-3 min, convention/expo floor), resample to 16 kHz mono WAV, save as `audio/drone.wav` and `audio/crowd.wav` | **You** | Pending |
-| 4 | Build `sim_server.py` (FastAPI backend with `/simulate` endpoint) | Agent | Pending |
-| 5 | Add "Live Sim" mode to `array_explorer.html` + wire fetch + audio player | Agent | Pending |
-| 6 | Verify end-to-end in browser | Agent | Pending |
+| 1.1 | Fix corrupted `run_comparison.py` (restore constants FS/NFFT/HOP/FMIN/FMAX/C + matplotlib import) | Agent | Pending |
+| 1.2 | Create `requirements.txt` | Agent | Pending |
+| 1.3 | Convert `soundclips/*.mp3` to 16 kHz mono WAV in `audio/` (drone.wav + crowd.wav) | Agent | Pending |
+| 1.4 | Verify audio files (check duration, sample rate, mono) | Agent | Pending |
+| 2.1 | Build `sim_server.py` (FastAPI backend with `/simulate` endpoint) | Agent | Pending |
+| 2.2 | Test server standalone (curl/Python request, confirm valid JSON + audio) | Agent | Pending |
 
-> The server falls back to synthetic signals if audio files are missing, so tasks 3 and 4 are independent -- you can drop the files in at any time.
+**Checkpoint**: Server returns correct power grid + beamformed audio for a test request.
+
+### Phase 3: Frontend
+
+| # | Task | Owner | Status |
+|---|------|-------|--------|
+| 3.1 | Add "Live Sim" mode to `array_explorer.html` (UI controls, Run button, spinner, audio player) | Agent | Pending |
+| 3.2 | Wire fetch to `/simulate`, render power grid + mic positions + DOA arrows + audio | Agent | Pending |
+| 3.3 | Verify end-to-end in browser (all geometries, diffuse toggle, SNR extremes, audio playback) | Agent | Pending |
+
+**Checkpoint**: Full interactive simulation works in browser.
+
+### Audio source files (provided by you)
+
+Raw MP3s in `soundclips/`:
+- `soundclips/drone_noise.mp3` -- drone recording
+- `soundclips/ambientnoiseconvention1.mp3` -- crowd ambience clip 1
+- `soundclips/ambientnoiseconvention2.mp3` -- crowd ambience clip 2 (concatenated with clip 1 for ~3 min total)
+
+> The server falls back to synthetic signals if audio files are missing, so audio conversion and server build are independent.
 
 ## Architecture
 
@@ -62,16 +85,16 @@ fastapi
 uvicorn
 ```
 
-## 3. Audio Files (your task)
+## 3. Audio Files
 
-Place in `audio/` folder at project root:
+Raw source files provided in `soundclips/`:
+- `soundclips/drone_noise.mp3`
+- `soundclips/ambientnoiseconvention1.mp3`
+- `soundclips/ambientnoiseconvention2.mp3`
 
-- **`audio/drone.wav`** -- 16 kHz, mono, 15-30 seconds
-  - Outdoor recording, drone hovering, clearly dominant
-  - Minimal wind/talking in background
-- **`audio/crowd.wav`** -- 16 kHz, mono, 2-3 minutes
-  - Indoor convention/trade show floor ambience
-  - Continuous wash of overlapping conversations + activity
+Converted by agent (step 1.3) to `audio/` folder:
+- **`audio/drone.wav`** -- 16 kHz, mono (from drone_noise.mp3)
+- **`audio/crowd.wav`** -- 16 kHz, mono (ambientnoiseconvention1 + 2 concatenated)
 
 The server normalizes both to unit RMS on load, so original recording levels don't matter.
 

@@ -1,0 +1,6 @@
+numpy
+pyroomacoustics
+matplotlib
+scipy
+fastapi
+uvicorn

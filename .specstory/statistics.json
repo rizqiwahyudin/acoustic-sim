@@ -7,16 +7,43 @@
       "end_timestamp": "2026-04-15T20:45:48+02:00",
       "markdown_size_bytes": 31059,
       "provider": "cursoride",
-      "last_updated": "2026-04-15T19:19:03Z"
+      "last_updated": "2026-04-23T11:19:25Z"
     },
     "0a4bee61-36ce-440f-ae0c-11fc8f02fe4e": {
-      "user_message_count": 68,
-      "agent_message_count": 440,
+      "user_message_count": 21,
+      "agent_message_count": 606,
       "start_timestamp": "2026-04-13T22:10:23+02:00",
       "end_timestamp": "2026-04-13T22:10:23+02:00",
-      "markdown_size_bytes": 3000539,
+      "markdown_size_bytes": 2934737,
       "provider": "cursoride",
-      "last_updated": "2026-04-16T12:43:50Z"
+      "last_updated": "2026-04-23T12:05:23Z"
+    },
+    "879232a6-cb0f-46e2-bc55-02bf1a3c3cb8": {
+      "user_message_count": 1,
+      "agent_message_count": 4,
+      "start_timestamp": "2026-04-16T23:03:27+02:00",
+      "end_timestamp": "2026-04-16T23:03:27+02:00",
+      "markdown_size_bytes": 17539,
+      "provider": "cursoride",
+      "last_updated": "2026-04-23T11:19:25Z"
+    },
+    "bd5d8214-b14f-479b-ab46-4dae745771bf": {
+      "user_message_count": 1,
+      "agent_message_count": 15,
+      "start_timestamp": "2026-04-16T23:03:37+02:00",
+      "end_timestamp": "2026-04-16T23:03:37+02:00",
+      "markdown_size_bytes": 26830,
+      "provider": "cursoride",
+      "last_updated": "2026-04-23T11:19:25Z"
+    },
+    "c89a5953-c8a8-4e85-b730-d3673a2b46b4": {
+      "user_message_count": 1,
+      "agent_message_count": 6,
+      "start_timestamp": "2026-04-16T23:03:31+02:00",
+      "end_timestamp": "2026-04-16T23:03:31+02:00",
+      "markdown_size_bytes": 13261,
+      "provider": "cursoride",
+      "last_updated": "2026-04-23T11:19:25Z"
     },
     "e5f0288c-aa7b-4e38-9894-a4e77d3161d2": {
       "user_message_count": 1,
@@ -25,7 +52,7 @@
       "end_timestamp": "2026-04-15T20:45:52+02:00",
       "markdown_size_bytes": 12742,
       "provider": "cursoride",
-      "last_updated": "2026-04-15T19:19:03Z"
+      "last_updated": "2026-04-23T11:19:25Z"
     }
   }
 }
