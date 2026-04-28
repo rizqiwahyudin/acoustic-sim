@@ -28,6 +28,7 @@ from acoustic_utils import (
     apply_mic_mismatch_v2,
     atmospheric_elevation_bias_deg,
     atmospheric_z_bias,
+    build_freq_bin_mask,
     build_materials,
     chunk_signal_with_crossfade,
     compute_top_n_peaks,
@@ -47,6 +48,8 @@ from acoustic_utils import (
     CODEC_BIT_DEPTH_DEFAULT,
     CROSSTALK_COUPLING_DB_DEFAULT,
     CROWD_SPL_DB,
+    DEFAULT_FMAX,
+    DEFAULT_FMIN,
     DRONE_SPL_DB,
     EXHIBITION_HALL_MATERIALS,
     MATERIAL_CHOICES,
@@ -62,8 +65,10 @@ from acoustic_utils import (
 FS = 16_000
 NFFT = 1024
 HOP = 512
-FMIN = 200.0
-FMAX = 2000.0
+# FMIN / FMAX are retained as legacy defaults for any caller that imports
+# them directly; the live path now reads req.fmin_hz / req.fmax_hz instead.
+FMIN = DEFAULT_FMIN
+FMAX = DEFAULT_FMAX
 C = 343.0
 MARGIN = 0.3
 
@@ -254,18 +259,35 @@ def encode_wav_b64_raw(audio, fs):
     return base64.b64encode(buf.read()).decode("ascii")
 
 
-def encode_three_wavs_joint(clips, fs):
-    """Encode three audio clips as base64 WAVs sharing a common peak scale.
+# Fixed full-scale reference used when audio normalization is disabled, so
+# the downloaded .wav files preserve absolute amplitudes across separate
+# trials. 1 Pa ≈ 94 dB SPL, which comfortably brackets drone / crowd /
+# PA levels in our sim without clipping at typical integration windows.
+AUDIO_FULL_SCALE_PA = 1.0
 
-    The three clips (raw, unsteered, beamformed) are normalised by a single
-    peak value so that their relative loudness is preserved on playback.
-    This is essential for the user to hear that beamforming improves SNR --
-    normalising each clip independently would erase that difference.
+
+def encode_three_wavs_joint(clips, fs, normalize=True):
+    """Encode three audio clips as base64 WAVs.
+
+    When ``normalize=True`` (default): the three clips (raw, unsteered,
+    beamformed) are normalised by a single joint peak value so that their
+    relative loudness is preserved on playback. This makes it easy to hear
+    that beamforming improves SNR -- normalising each clip independently
+    would erase that difference.
+
+    When ``normalize=False``: each clip is encoded against a fixed
+    ``AUDIO_FULL_SCALE_PA`` reference (1 Pa) instead. That scale is the
+    same for every trial, so the downloaded .wav amplitudes preserve the
+    *absolute* Pascal values. Use this mode when you want to compare
+    loudness across two separate trials (e.g. a 1/r² free-field falloff
+    sanity check).
     """
-    peak = max(float(np.max(np.abs(c))) for c in clips)
-    if peak < 1e-12:
-        peak = 1.0
-    return [encode_wav_b64_raw(c / peak * 0.9, fs) for c in clips]
+    if normalize:
+        peak = max(float(np.max(np.abs(c))) for c in clips)
+        if peak < 1e-12:
+            peak = 1.0
+        return [encode_wav_b64_raw(c / peak * 0.9, fs) for c in clips]
+    return [encode_wav_b64_raw(c / AUDIO_FULL_SCALE_PA, fs) for c in clips]
 
 
 # ── FastAPI app ────────────────────────────────────────────────────────────────
@@ -340,6 +362,18 @@ class SimRequest(BaseModel):
     crosstalk_model: str = "simple"   # "simple" | "fir_capacitive"
     crosstalk_corner_hz: float = 500.0
     crosstalk_fir_path: str = ""
+
+    # Phase 3+: SRP-PHAT band and optional harmonic-comb weighting.
+    fmin_hz: float = DEFAULT_FMIN
+    fmax_hz: float = DEFAULT_FMAX
+    harmonic_comb: bool = False
+    drone_fundamental_hz: float = 200.0
+
+    # Audio-normalization toggle: default keeps the legacy joint-peak
+    # normalization so beamforming SNR gain is audible in playback. Turn
+    # off to preserve absolute amplitude across trials (use for 1/r^2
+    # free-field falloff checks etc.).
+    normalize_audio: bool = True
 
 
 def run_live_trial(req: SimRequest) -> dict:
@@ -515,8 +549,13 @@ def run_live_trial(req: SimRequest) -> dict:
         for sig in signals
     ])
 
-    df = FS / NFFT
-    freq_bins = np.arange(int(FMIN / df), int(FMAX / df))
+    freq_bins = build_freq_bin_mask(
+        FS, NFFT,
+        fmin_hz=req.fmin_hz,
+        fmax_hz=req.fmax_hz,
+        harmonic_comb=req.harmonic_comb,
+        f0_hz=req.drone_fundamental_hz,
+    )
 
     doa = pra.doa.SRP(
         array_R, FS, NFFT, c=C, num_src=1, dim=3,
@@ -543,6 +582,7 @@ def run_live_trial(req: SimRequest) -> dict:
 
     raw_b64, unsteered_b64, bf_b64 = encode_three_wavs_joint(
         [raw_audio, unsteered_audio, bf_audio], FS,
+        normalize=req.normalize_audio,
     )
 
     # Phase 3A: MAX78000 ML-path preview -- quantize the beamformed audio
@@ -562,8 +602,17 @@ def run_live_trial(req: SimRequest) -> dict:
         ml_path_snr_db_val = round(ml_path_snr_db(bf_audio, ml_audio), 2)
 
         # Features computed on the quantized audio (what the CNN sees).
-        mel_features = log_mel_features(ml_audio, fs=FS, n_mels=n_mels)
-        mel_features_ref = log_mel_features(bf_audio, fs=FS, n_mels=n_mels)
+        # The mel filterbank tracks the user-configured DOA band so the
+        # spectrogram matches the slice of spectrum SRP-PHAT is using --
+        # they share the same analog-front-end bandpass on real hardware.
+        mel_features = log_mel_features(
+            ml_audio, fs=FS, n_mels=n_mels,
+            fmin=req.fmin_hz, fmax=req.fmax_hz,
+        )
+        mel_features_ref = log_mel_features(
+            bf_audio, fs=FS, n_mels=n_mels,
+            fmin=req.fmin_hz, fmax=req.fmax_hz,
+        )
         mel_features_q = ml_path_quantize_features(
             mel_features, bit_depth=feat_bits,
         )
@@ -571,16 +620,21 @@ def run_live_trial(req: SimRequest) -> dict:
             feature_snr_db(mel_features_ref, mel_features_q), 2,
         )
 
-        # Encode quantized audio as a 4th downloadable WAV, sharing the
-        # joint peak with the other three so relative loudness is
-        # preserved.
-        ml_audio_b64 = encode_wav_b64_raw(
-            np.clip(ml_audio / max(float(np.max(np.abs(ml_audio))), 1e-12) * 0.9,
-                    -1.0, 1.0),
-            FS,
-        )
+        # Encode the quantized audio as a 4th downloadable WAV. In
+        # normalize=True mode we peak-normalize it like the other three
+        # clips; in normalize=False mode we keep its absolute amplitude
+        # scaled by AUDIO_FULL_SCALE_PA to match the other clips.
+        if req.normalize_audio:
+            ml_audio_b64 = encode_wav_b64_raw(
+                np.clip(ml_audio / max(float(np.max(np.abs(ml_audio))), 1e-12) * 0.9,
+                        -1.0, 1.0),
+                FS,
+            )
+        else:
+            ml_audio_b64 = encode_wav_b64_raw(ml_audio / AUDIO_FULL_SCALE_PA, FS)
         ml_spectrogram_png_b64 = render_spectrogram_png_b64(
             mel_features_q, fs=FS, n_mels=n_mels,
+            fmin=req.fmin_hz, fmax=req.fmax_hz,
         )
 
     mic_rel = (array_R - array_center[:, None]).T.tolist()
@@ -634,6 +688,11 @@ def run_live_trial(req: SimRequest) -> dict:
         "pa_positions": pa_positions,
         "image_sources": image_sources,
         "rir": rir_data,
+        "fmin_hz": float(req.fmin_hz),
+        "fmax_hz": float(req.fmax_hz),
+        "harmonic_comb": bool(req.harmonic_comb),
+        "drone_fundamental_hz": float(req.drone_fundamental_hz),
+        "n_freq_bins": int(freq_bins.size),
     }
 
 

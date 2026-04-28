@@ -108,7 +108,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <body>
 
 <div id="controls" class="panel">
-  <h2>Array Explorer</h2>
+  <h2>ADI Scandinavia - Acoustic Beamformer</h2>
 
   <div class="preset-toolbar" id="presetToolbar">
     <div class="preset-btn" id="btnPresetSave">Save</div>
@@ -272,7 +272,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
     <div class="ctrl-row">
       <label>Crowd Sources: <span id="liveCrowdVal">30</span></label>
-      <input type="range" id="liveCrowd" min="0" max="50" step="1" value="30">
+      <input type="range" id="liveCrowd" min="0" max="100" step="1" value="30">
     </div>
     <div class="ctrl-row">
       <label>PA Sources: <span id="livePAVal">8</span></label>
@@ -356,6 +356,29 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="ctrl-row">
       <label>Temp gradient dT/dz: <span id="liveTempGradVal">0.0</span> &deg;C/m</label>
       <input type="range" id="liveTempGrad" min="-5" max="5" step="0.1" value="0.0">
+    </div>
+
+    <hr class="sep">
+    <div style="font-size:10.5px;font-weight:500;color:#888;font-family:'DM Mono',monospace;margin-bottom:6px;">DOA band (Phase 3+)</div>
+    <div class="ctrl-row">
+      <label>DOA fmin: <span id="liveFminVal">200</span> Hz</label>
+      <input type="range" id="liveFmin" min="50" max="4000" step="50" value="200">
+    </div>
+    <div class="ctrl-row">
+      <label>DOA fmax: <span id="liveFmaxVal">2000</span> Hz</label>
+      <input type="range" id="liveFmax" min="200" max="7000" step="50" value="2000">
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="liveHarmonicComb">
+      <label>Harmonic comb weighting</label>
+    </div>
+    <div class="impairment-detail" id="harmonicCombDetail">
+      <label>Drone fundamental f0: <span id="liveFundamentalVal">200</span> Hz</label>
+      <input type="range" id="liveFundamental" min="80" max="400" step="5" value="200">
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="liveNormalizeAudio" checked>
+      <label title="On: each run's .wav is peak-normalized for easy playback. Off: downloads preserve absolute Pascal amplitude across trials -- use for 1/r^2 or other level-comparison tests.">Normalize downloaded audio</label>
     </div>
 
     <hr class="sep">
@@ -1203,7 +1226,22 @@ async function runLiveSimulation() {
     ml_bit_depth: parseInt(document.getElementById('liveMlBitDepth').value),
     ml_feature_bit_depth: parseInt(document.getElementById('liveMlFeatBitDepth').value),
     ml_n_mels: parseInt(document.getElementById('liveMlNMels').value),
+    fmin_hz: parseFloat(document.getElementById('liveFmin').value),
+    fmax_hz: parseFloat(document.getElementById('liveFmax').value),
+    harmonic_comb: document.getElementById('liveHarmonicComb').checked,
+    drone_fundamental_hz: parseFloat(document.getElementById('liveFundamental').value),
+    normalize_audio: document.getElementById('liveNormalizeAudio').checked,
   };
+
+  // Phase 3+: forbid an empty DOA band (fmax must exceed fmin). If the user
+  // dragged the sliders past each other we nudge fmax up so the server never
+  // gets a degenerate band that would fall back silently.
+  if (params.fmax_hz <= params.fmin_hz) {
+    params.fmax_hz = params.fmin_hz + 50;
+    const fmaxEl = document.getElementById('liveFmax');
+    fmaxEl.value = params.fmax_hz;
+    document.getElementById('liveFmaxVal').textContent = params.fmax_hz.toFixed(0);
+  }
 
   try {
     const resp = await fetch('http://127.0.0.1:8766/simulate', {
@@ -1270,6 +1308,11 @@ async function runLiveSimulation() {
       `HW: ${[params.mic_mismatch&&'mismatch', params.crosstalk&&`xtalk ${params.crosstalk_db}dB (${params.crosstalk_model==='fir_capacitive'?'FIR '+params.crosstalk_corner_hz+'Hz':'flat'})`, params.quantization&&`${params.bit_depth}-bit`].filter(Boolean).join(' · ') || '<span style="color:#555">none</span>'}<br>` +
       (params.diffuse && params.crowd_model === 'plane_wave'
         ? `Crowd: <span class="val">plane-wave</span> (${params.n_plane_waves} planes)<br>` : '') +
+      `DOA band: <span class="val">${params.fmin_hz}-${params.fmax_hz}</span> Hz` +
+      (params.harmonic_comb
+        ? ` · comb <span class="val">f0=${params.drone_fundamental_hz} Hz</span>` : '') +
+      ((data.n_freq_bins !== undefined)
+        ? ` (${data.n_freq_bins} bins)` : '') + `<br>` +
       `<hr class="sep">` +
       `True: az=<span class="val">${data.true_az_deg}°</span> el=<span class="val">${data.true_el_deg}°</span><br>` +
       `Est: az=<span class="val">${data.est_az_deg}°</span> el=<span class="val">${data.est_el_deg}°</span><br>` +
@@ -1421,6 +1464,15 @@ document.getElementById('btnExhibitionHall').addEventListener('click', () => {
   document.getElementById('liveCrowdModel').value = 'point_source';
   document.getElementById('liveCrosstalkModel').value = 'simple';
   document.getElementById('liveMlPreview').checked = false;
+  // Phase 3+: also reset DOA-band knobs so Exhibition Hall matches the
+  // original Phase 1 / Phase 2 band (200-2000 Hz, flat, no comb).
+  const bandReset = {liveFmin: 200, liveFmax: 2000, liveFundamental: 200};
+  for (const [id, v] of Object.entries(bandReset)) {
+    const el = document.getElementById(id);
+    if (el) { el.value = v; el.dispatchEvent(new Event('input')); }
+  }
+  document.getElementById('liveHarmonicComb').checked = false;
+  document.getElementById('liveNormalizeAudio').checked = true;
   syncImpairmentDetails();
 });
 
@@ -1442,6 +1494,9 @@ function syncImpairmentDetails() {
   const firMode = document.getElementById('liveCrosstalkModel').value === 'fir_capacitive';
   document.getElementById('liveCrosstalkCornerLabel').style.display = firMode ? 'block' : 'none';
   document.getElementById('liveCrosstalkCorner').style.display      = firMode ? 'block' : 'none';
+  // Phase 3+: harmonic-comb detail (fundamental slider) only when comb is on.
+  document.getElementById('harmonicCombDetail').classList.toggle('active',
+    document.getElementById('liveHarmonicComb').checked);
 }
 document.getElementById('liveCrosstalk').addEventListener('change', syncImpairmentDetails);
 document.getElementById('liveQuant').addEventListener('change', syncImpairmentDetails);
@@ -1461,6 +1516,16 @@ document.getElementById('liveNPlaneWaves').addEventListener('input', (e) => {
 });
 document.getElementById('liveMlNMels').addEventListener('input', (e) => {
   document.getElementById('liveMlNMelsVal').textContent = e.target.value;
+});
+document.getElementById('liveHarmonicComb').addEventListener('change', syncImpairmentDetails);
+document.getElementById('liveFmin').addEventListener('input', (e) => {
+  document.getElementById('liveFminVal').textContent = e.target.value;
+});
+document.getElementById('liveFmax').addEventListener('input', (e) => {
+  document.getElementById('liveFmaxVal').textContent = e.target.value;
+});
+document.getElementById('liveFundamental').addEventListener('input', (e) => {
+  document.getElementById('liveFundamentalVal').textContent = e.target.value;
 });
 syncImpairmentDetails();
 updateLiveLabels();
@@ -1531,6 +1596,7 @@ const PRESET_SLIDER_IDS = [
   'liveTemp','liveHumidity','liveTempGrad',
   'liveSpeed','liveHeading','liveChunks',
   'liveNPlaneWaves','liveCrosstalkCorner','liveMlNMels',
+  'liveFmin','liveFmax','liveFundamental',
 ];
 const PRESET_SELECT_IDS = [
   'liveGeo','liveBitDepth','liveTrajType',
@@ -1540,7 +1606,7 @@ const PRESET_SELECT_IDS = [
 ];
 const PRESET_CHECK_IDS = [
   'liveRandSeed','liveDiffuse','liveMismatch','liveCrosstalk','liveQuant',
-  'liveMoving','liveMlPreview',
+  'liveMoving','liveMlPreview','liveHarmonicComb','liveNormalizeAudio',
 ];
 
 function captureState() {

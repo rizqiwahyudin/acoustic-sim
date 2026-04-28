@@ -432,5 +432,160 @@ def test_ml_preview_int8_worse_than_int16():
     )
 
 
+# ── Phase 3+ DOA-band tuning ──────────────────────────────────────────────────
+
+def test_default_band_matches_pre_existing_behavior(monkeypatch):
+    """DOA-band defaults safety net: a SimRequest that doesn't touch the
+    new fmin_hz / fmax_hz / harmonic_comb knobs must produce the *same*
+    DOA as one that sets them explicitly to 200 Hz / 2000 Hz / flat.
+    This is the analogue of test_crowd_model_default_is_point_source_parity
+    for the Phase 3+ band knobs -- it guarantees we haven't silently
+    rewired the defaults, so every existing sweep / preset / URL-share
+    continues to behave exactly as before.
+    """
+    _force_synthetic_audio(monkeypatch)
+    seed = 53
+
+    req_default = _make_req(seed, geometry="CYLINDER")
+    req_explicit = _make_req(seed, geometry="CYLINDER")
+    req_explicit.fmin_hz = 200.0
+    req_explicit.fmax_hz = 2000.0
+    req_explicit.harmonic_comb = False
+    req_explicit.drone_fundamental_hz = 200.0
+
+    r0 = run_live_trial(req_default)
+    r1 = run_live_trial(req_explicit)
+    _assert_doa_match(
+        r1, r0["est_az_deg"], r0["est_el_deg"],
+        tol_deg=0.01,
+        context="DOA-band default vs explicit 200-2000 Hz flat",
+    )
+
+
+def test_narrowing_band_drops_srp_bin_count():
+    """Narrowing the SRP-PHAT band must drop the number of integrated
+    STFT bins. We test ``build_freq_bin_mask`` directly rather than
+    inspecting the internal SRP power (which isn't exposed on the live
+    response) -- this guards the mask function, which is the single
+    source of truth that both live and batch call.
+    """
+    from acoustic_utils import build_freq_bin_mask
+
+    fs, nfft = 16000, 1024
+    wide = build_freq_bin_mask(fs, nfft, 200.0, 2000.0)
+    narrow = build_freq_bin_mask(fs, nfft, 500.0, 1500.0)
+    assert narrow.size < wide.size, (
+        f"narrowing band didn't drop bins: wide={wide.size} narrow={narrow.size}"
+    )
+    df = fs / nfft
+    wide_bw = wide[-1] * df - wide[0] * df
+    narrow_bw = narrow[-1] * df - narrow[0] * df
+    assert narrow_bw < wide_bw * 0.6, (
+        f"narrow bandwidth not clearly smaller: wide={wide_bw:.0f} Hz "
+        f"narrow={narrow_bw:.0f} Hz"
+    )
+
+
+def test_harmonic_comb_uses_fewer_bins():
+    """Harmonic-comb weighting must select a strict subset of the flat
+    band -- specifically at most ``max_harmonics * (2*tol_bins + 1)``
+    bins and strictly fewer than ``(fmax - fmin) / df``. This is the
+    single invariant that justifies calling the comb a "matched filter":
+    if the comb ever returns the full band, there's a bug.
+    """
+    from acoustic_utils import build_freq_bin_mask, DEFAULT_HARMONIC_TOL_HZ
+
+    fs, nfft = 16000, 1024
+    df = fs / nfft
+    fmin, fmax = 200.0, 2000.0
+    f0 = 300.0
+
+    flat = build_freq_bin_mask(fs, nfft, fmin, fmax)
+    combed = build_freq_bin_mask(
+        fs, nfft, fmin, fmax, harmonic_comb=True, f0_hz=f0,
+    )
+
+    assert combed.size > 0, "comb should not produce an empty result for in-band f0"
+    assert combed.size < flat.size, (
+        f"comb did not subset the flat band: "
+        f"comb={combed.size} flat={flat.size}"
+    )
+
+    # Every comb bin must fall within harmonic_tol_hz of some n*f0 and
+    # must also be inside [fmin, fmax].
+    tol = DEFAULT_HARMONIC_TOL_HZ
+    for idx in combed:
+        f = idx * df
+        assert fmin - tol <= f <= fmax + tol, (
+            f"comb bin at {f:.1f} Hz is outside [{fmin}, {fmax}]"
+        )
+        n_best = int(round(f / f0))
+        if n_best < 1:
+            n_best = 1
+        dist_hz = abs(f - n_best * f0)
+        assert dist_hz <= tol, (
+            f"comb bin at {f:.1f} Hz is not within +/- {tol} Hz of any "
+            f"harmonic of f0={f0} (nearest n*f0 = {n_best*f0} Hz, "
+            f"distance {dist_hz:.2f} Hz)"
+        )
+
+
+def test_harmonic_comb_locks_onto_tonal_drone(monkeypatch):
+    """End-to-end: if the drone signal is a pure harmonic stack at
+    multiples of f0=200 Hz, the harmonic-comb mode at f0=200 Hz must
+    still recover the correct DOA on a CYLINDER (which doesn't suffer
+    the UCA mirror ambiguity). This proves the comb path doesn't
+    accidentally zero out too many bins when the target genuinely is
+    harmonic.
+    """
+    import sim_server as _sim
+
+    # Build a 60-second pseudo-drone with harmonics at 200/400/600/800 Hz
+    # and a small noise floor so PHAT whitening still has something to
+    # work with outside the tones.
+    fs = _sim.FS
+    n = fs * 60
+    rng = np.random.default_rng(101)
+    t = np.arange(n) / fs
+    drone = np.zeros(n, dtype=np.float64)
+    for f_hz in [200.0, 400.0, 600.0, 800.0]:
+        drone += np.sin(2 * np.pi * f_hz * t + rng.uniform(0, 2 * np.pi))
+    drone += 0.01 * rng.standard_normal(n)
+    drone /= np.max(np.abs(drone))
+    monkeypatch.setattr(_sim, "DRONE_AUDIO", drone)
+    monkeypatch.setattr(_sim, "CROWD_AUDIO", None)
+
+    seed = 73
+    req_flat = _make_req(seed, geometry="CYLINDER")
+    req_comb = _make_req(seed, geometry="CYLINDER")
+    req_comb.harmonic_comb = True
+    req_comb.drone_fundamental_hz = 200.0
+
+    r_flat = run_live_trial(req_flat)
+    r_comb = run_live_trial(req_comb)
+
+    # Both must land within one azimuth grid bin (5 deg) of truth. The
+    # cylinder disambiguates elevation sign so we also require el within
+    # two colatitude bins (20 deg) to absorb the ~10 deg grid resolution.
+    assert abs(_wrap_deg(r_flat["est_az_deg"] - run_comparison.DEFAULT_AZ)) < 6.0, (
+        f"flat-band DOA failed on tonal drone: az={r_flat['est_az_deg']}"
+    )
+    assert abs(_wrap_deg(r_comb["est_az_deg"] - run_comparison.DEFAULT_AZ)) < 6.0, (
+        f"harmonic-comb DOA failed on tonal drone: az={r_comb['est_az_deg']}"
+    )
+    assert abs(r_flat["est_el_deg"] - run_comparison.DEFAULT_EL) < 20.1, (
+        f"flat-band elevation off: el={r_flat['est_el_deg']}"
+    )
+    assert abs(r_comb["est_el_deg"] - run_comparison.DEFAULT_EL) < 20.1, (
+        f"harmonic-comb elevation off: el={r_comb['est_el_deg']}"
+    )
+
+    # The comb must have used fewer bins than the flat mode.
+    assert r_comb["n_freq_bins"] < r_flat["n_freq_bins"], (
+        f"comb did not shrink the bin set: "
+        f"flat_bins={r_flat['n_freq_bins']}  comb_bins={r_comb['n_freq_bins']}"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

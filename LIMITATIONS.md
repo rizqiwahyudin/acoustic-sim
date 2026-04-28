@@ -1,9 +1,24 @@
-# Simulation Limitations -- Phase 1 + 2a + 2b + 3
+# Simulation Limitations -- Phase 1 + 2a + 2b + 3 + DOA-band tuning
 
 This document inventories what our `pyroomacoustics`-based simulation
 **can** and **cannot** tell us, so that conclusions drawn from the
 comparison and live-sim tools are correctly scoped for our real
 drone-detection build.
+
+> **What's new in Phase 3+ (DOA band).** The SRP-PHAT band is no
+> longer hardcoded at 200-2000 Hz. Both live and batch now expose
+> three new knobs (`fmin_hz`, `fmax_hz`, `harmonic_comb` + `drone_fundamental_hz`)
+> that are threaded through a shared `acoustic_utils.build_freq_bin_mask`
+> helper so the live UI and `run_comparison.py` pick bins the same way.
+> The harmonic-comb mode is a deliberately **simple** rectangular
+> weighting -- every STFT bin within +/- 10 Hz of n*f0 (n = 1..20) that
+> also lies in [fmin, fmax] gets weight 1.0; everything else gets 0.
+> No shaped lobes, no RPM tracking, no sub-band voting. When the comb
+> is requested but produces zero bins (e.g. f0 outside the band) the
+> implementation silently falls back to the flat band so the server
+> never crashes. All three knobs default to the Phase 3 baseline so
+> existing sweeps, URL presets, and `tests/test_parity.py` cases stay
+> byte-compatible. See §2d below for the remaining simplifications.
 
 > **What's new in Phase 3.** The pipeline now includes a fixed-point
 > **MAX78000 ML-path preview** (beamformed audio is re-quantized to
@@ -278,6 +293,59 @@ off.
   check blocks `[i] [j] [k]` covering ML preview, plane-wave crowd,
   and FIR crosstalk end-to-end through the FastAPI server.
 
+## 2d. Newly tunable in Phase 3+ (DOA band)
+
+These items previously lived as hardcoded module-level `FMIN = 200.0`
+/ `FMAX = 2000.0` constants in both the live and batch pipelines.
+They are now three user-facing knobs that default to the Phase 3
+baseline so every existing sweep, preset, and parity test stays
+byte-compatible.
+
+- **SRP-PHAT band edges (`fmin_hz` / `fmax_hz`).** The shared helper
+  `acoustic_utils.build_freq_bin_mask(fs, n_fft, fmin, fmax, ...)`
+  returns the list of STFT bin indices that SRP-PHAT integrates over.
+  Live UI exposes two sliders (`liveFmin`, `liveFmax`) and batch
+  `run_comparison.py` exposes `--fmin` / `--fmax` CLI flags; both
+  routes feed the same helper so live and batch pick identical bins
+  for matched parameters. The `df = fs / n_fft = 15.625 Hz` bin
+  resolution means the effective band is snapped to the nearest bin
+  centre; in practice the user-visible slider step (50 Hz) is always
+  coarser than the snap, so the coarse UI values round-trip cleanly.
+- **Harmonic-comb weighting (`harmonic_comb` + `drone_fundamental_hz`).**
+  When on, only bins within +/- 10 Hz (`DEFAULT_HARMONIC_TOL_HZ`) of
+  n * f0 for n = 1..20 (`DEFAULT_HARMONIC_MAX_ORDER`) that also fall
+  inside [fmin, fmax] survive. This imitates a matched-filter
+  front-end tuned to a known drone's blade-pass fundamental and its
+  first ~20 rotor harmonics. The response dict echoes the resulting
+  bin count back as `n_freq_bins` so the UI can display it and tests
+  can assert the comb actually narrows the set. **What remains
+  simplified:** the weighting is a flat 1.0 / 0.0 mask, not a shaped
+  Gaussian lobe; the fundamental is user-supplied, not auto-tracked
+  against the live audio; and the tolerance is a fixed +/- 10 Hz
+  rather than adapting to STFT resolution. Each of those is a
+  deliberate Phase-3+ scope-cap; `build_freq_bin_mask`'s signature
+  was designed so a weighted-bin variant can replace this without
+  changing any callers.
+- **Empty-band fallback.** When the comb produces an empty mask
+  (e.g. the user set f0 outside [fmin, fmax], or the tolerance is
+  too tight), the helper returns the flat band instead of raising.
+  This keeps the UI forgiving of bad slider combinations at the
+  cost of hiding a "comb did nothing" state from the user; the
+  `n_freq_bins` echo in the response is the only way to tell.
+- **Phase 3+ tests.** `tests/test_parity.py` gains four new cases:
+  `test_default_band_matches_pre_existing_behavior` (safety net for
+  the defaults);
+  `test_narrowing_band_drops_srp_bin_count` (the mask function
+  actually narrows as expected);
+  `test_harmonic_comb_uses_fewer_bins` (comb is a strict subset of
+  the flat band, and every bin is within +/- tol of some n*f0); and
+  `test_harmonic_comb_locks_onto_tonal_drone` (an end-to-end check
+  with a synthetic harmonic stack that verifies the comb path still
+  recovers DOA when the target genuinely is harmonic, and that it
+  uses strictly fewer bins than the flat mode). `tests/_smoke_live.py`
+  adds block `[l]` covering the fmin/fmax override and harmonic
+  comb end-to-end through the FastAPI server.
+
 ## 3. Expected calibration offsets to reality
 
 Rule-of-thumb numbers based on published literature and the ways the
@@ -360,9 +428,23 @@ gap before venue day:
   (`ml_path_snr_db`, `feature_snr_db`) populated when
   `--ml-preview` is passed; five new pytest cases guarding the
   Phase 3 invariants; three new HTTP smoke-test blocks.
+- **Phase 3+ DOA-band tuning (done)** -- SRP-PHAT band is no longer
+  hardcoded at 200-2000 Hz. User-tunable `fmin_hz` / `fmax_hz` sliders
+  in the live UI plus `--fmin` / `--fmax` CLI flags in
+  `run_comparison.py`, both routed through the shared
+  `acoustic_utils.build_freq_bin_mask` helper so live and batch stay
+  in lockstep. A simple harmonic-comb weighting mode
+  (`harmonic_comb` + `drone_fundamental_hz`) restricts SRP-PHAT
+  integration to +/- 10 Hz windows around each n*f0, imitating a
+  matched-filter front-end. Four new pytest cases and one new HTTP
+  smoke-test block cover the defaults-parity, narrowing, comb-subset,
+  and end-to-end harmonic-lock invariants. Exhibition Hall preset
+  explicitly resets these to 200-2000 Hz flat so it remains the known
+  baseline.
 
-The explicit roadmap is now **closed**. Any further realism work
-(real MAX78000 CNN inference, measured FIR traces from the actual
-PCB, non-nearest-neighbour crosstalk topologies, measured RIRs
-replacing ShoeBox ISM) is out of the documented Phase-1-through-3
-scope and should be tracked separately against hardware milestones.
+Further realism work (real MAX78000 CNN inference, measured FIR
+traces from the actual PCB, non-nearest-neighbour crosstalk
+topologies, measured RIRs replacing ShoeBox ISM, auto-tracking
+fundamental for the harmonic comb, sub-band SRP-PHAT voting,
+MVDR adaptive beamforming) is out of the documented scope and
+should be tracked separately against hardware milestones.

@@ -14,6 +14,9 @@ Checks:
   (j) Phase 3B plane-wave crowd mode: returns a valid DOA response.
   (k) Phase 3C FIR capacitive crosstalk: returns a valid DOA response and
       the mic audio differs from the simple-crosstalk baseline.
+  (l) Phase 3+ DOA-band + harmonic-comb: fmin/fmax override and
+      harmonic_comb=True are echoed back by the server and produce a
+      substantially smaller freq_bins set without wrecking DOA accuracy.
 
 Run manually (server must be on 127.0.0.1:8766):
   python tests/_smoke_live.py
@@ -305,6 +308,39 @@ def main() -> int:
     print(f"    FIR vs simple raw-mic relative RMS diff = {rel*100:.2f}%")
     if rel < 1e-4:
         print("    FAIL: FIR crosstalk did not change the audio at all")
+        ok = False
+
+    print("[l] Phase 3+ DOA-band tuning + harmonic comb ...")
+    body_band = base_payload()
+    body_band["fmin_hz"] = 300.0
+    body_band["fmax_hz"] = 2500.0
+    body_band["harmonic_comb"] = True
+    body_band["drone_fundamental_hz"] = 200.0
+    r_band = post("/simulate", body_band)
+    az_err = abs((r_band["est_az_deg"] - 60) % 360)
+    az_err = min(az_err, 360 - az_err)
+    el_err = abs(r_band["est_el_deg"] - 30)
+    n_bins = r_band.get("n_freq_bins")
+    echoed_band = f"{r_band.get('fmin_hz')}-{r_band.get('fmax_hz')} Hz"
+    print(f"    est az={r_band['est_az_deg']} el={r_band['est_el_deg']} "
+          f"(err az={az_err:.1f} el={el_err:.1f})")
+    print(f"    server echoed band={echoed_band} comb={r_band.get('harmonic_comb')} "
+          f"f0={r_band.get('drone_fundamental_hz')} Hz  n_bins={n_bins}")
+    if not r_band.get("harmonic_comb", False):
+        print("    FAIL: harmonic_comb was not echoed back as True")
+        ok = False
+    if n_bins is None or n_bins < 1:
+        print("    FAIL: n_freq_bins missing or zero")
+        ok = False
+    # Comb at f0=200 Hz across a 300-2500 Hz band should produce far fewer
+    # bins than the flat default (~143 at 15.6 Hz/bin). 40 is a generous
+    # ceiling that still catches "comb silently fell back to flat".
+    elif n_bins > 40:
+        print(f"    FAIL: comb kept too many bins ({n_bins}) -- fallback bug?")
+        ok = False
+    if az_err > 10 or el_err > 20:
+        print(f"    FAIL: DOA drifted too far under comb: "
+              f"az_err={az_err:.1f} el_err={el_err:.1f}")
         ok = False
 
     if ok:

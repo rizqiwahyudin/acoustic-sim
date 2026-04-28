@@ -57,6 +57,20 @@
 >
 > See **[LIMITATIONS.md §2c](LIMITATIONS.md)** for the remaining simplifications (log-mel is a proxy, finite plane-wave count, analytic 1-pole FIR).
 
+> **Phase 3+ DOA-band update.** The SRP-PHAT frequency band is no longer hardcoded at 200-2000 Hz. Both live and batch now expose three new knobs that default to the Phase 3 baseline so existing sweeps and URL presets stay byte-compatible:
+>
+> - **`fmin_hz` / `fmax_hz` sliders and CLI flags.** Narrow the DOA-integration band to the drone-relevant slice of spectrum. Default 200-2000 Hz; typical tuning for small drones is 300-2500 Hz, which drops HVAC rumble and most codec-artefact-band energy.
+> - **Harmonic-comb weighting.** A checkbox + "Drone fundamental f0" slider that restricts SRP-PHAT to +/- 10 Hz windows around n*f0 (n = 1..20) inside the band. Imitates a matched-filter front-end tuned to a known drone's blade-pass fundamental and its rotor harmonics. Empty comb falls back silently to the flat band; the response dict reports the actual `n_freq_bins` used so users can confirm the comb actually narrowed the set.
+>
+> Both routes share `acoustic_utils.build_freq_bin_mask` so live and batch pick identical bins for matched parameters; `tests/test_parity.py` has four new cases (defaults-parity, narrowing, comb-subset, end-to-end harmonic lock) plus one new HTTP smoke-test block `[l]`. The Exhibition Hall preset resets these knobs to 200-2000 Hz flat so it remains the known baseline.
+>
+> ### How to tune the DOA band
+>
+> - **UI:** on the Live Sim panel, the "DOA band (Phase 3+)" block sits right below Atmosphere. Drag `DOA fmin` and `DOA fmax` to the drone-relevant slice (try 300 / 2500 Hz for small drones). Tick "Harmonic comb weighting" to engage matched-filter mode; the "Drone fundamental f0" slider appears below (80-400 Hz). The info panel reports `DOA band: <fmin>-<fmax> Hz` and, when the comb is on, the active `f0` and final bin count.
+> - **CLI:** `python run_comparison.py --fmin 300 --fmax 2500 --harmonic-comb --drone-fundamental 200 --test` for a batch sweep under the tuned band.
+>
+> See **[LIMITATIONS.md §2d](LIMITATIONS.md)** for the remaining simplifications (rectangular +/- 10 Hz weighting, user-supplied f0, no sub-band voting, no MVDR adaptation).
+
 This document describes the simulation system used to evaluate microphone array geometries for acoustic direction-of-arrival (DOA) estimation. It covers the physical models, algorithms, design decisions, known limitations, and the scope of valid conclusions.
 
 ---
@@ -420,6 +434,7 @@ A 250 x 80 pixel canvas displays the Room Impulse Response for the drone source 
 - The SNR formula incorporates geometric spreading, so the configured SNR value is **referenced to source power at the source distance**, not a simple receiver-side noise floor.
 - **MAX78000 ML path is previewed, not executed.** Phase 3 optionally re-quantizes the beamformed audio to int8 / int16 and runs a **proxy log-mel feature extractor**, reporting audio-domain and feature-domain quantization SNR. This is a stand-in for what a typical audio-classifier CNN would see; actual MAX78000 network inference (INL, accumulator-width activations, real classifier weights) is out of scope.
 - **Crosstalk model is either flat or 1-pole.** With the Phase 3 FIR model active, the neighbour-leakage path is a single-pole high-pass (capacitive-coupling physics). Real PCB coupling has multiple poles and layout-dependent non-nearest-neighbour paths; these drop in via `--crosstalk-fir-path` once measured traces are available.
+- **DOA band is user-tunable, but the harmonic-comb weighting is deliberately simple.** Phase 3+ lets the user set `fmin_hz` / `fmax_hz` and optionally enable a harmonic comb that restricts SRP-PHAT integration to +/- 10 Hz around each n*f0 (n = 1..20). No shaped Gaussian lobes, no auto-tracking of f0, no sub-band voting, and no MVDR adaptive null-forming. On real hardware the DSP should recalibrate the band from recorded drone spectra and consider harmonic tracking if the drone's RPM varies significantly.
 
 ---
 

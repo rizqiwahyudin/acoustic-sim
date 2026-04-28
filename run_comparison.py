@@ -33,6 +33,7 @@ from acoustic_utils import (
     apply_crosstalk,
     apply_crosstalk_fir,
     atmospheric_z_bias,
+    build_freq_bin_mask,
     build_materials,
     crowd_positions_mixed,
     feature_snr_db as _feature_snr_db,
@@ -47,6 +48,8 @@ from acoustic_utils import (
     wall_adjacent_positions,
     CROSSTALK_COUPLING_DB_DEFAULT,
     CROWD_SPL_DB,
+    DEFAULT_FMAX,
+    DEFAULT_FMIN,
     EXHIBITION_HALL_MATERIALS,
     MIC_NOISE_FLOOR_DB,
     ML_DEFAULT_BIT_DEPTH,
@@ -58,8 +61,11 @@ from acoustic_utils import (
 FS = 16_000
 NFFT = 1024
 HOP = 512
-FMIN = 200.0
-FMAX = 2000.0
+# Legacy module-level defaults retained for any caller that imports them
+# directly; the batch path now reads FMIN_HZ / FMAX_HZ globals (set via CLI)
+# through build_freq_bin_mask.
+FMIN = DEFAULT_FMIN
+FMAX = DEFAULT_FMAX
 C = 343.0
 
 SIGNAL_SECONDS = 1.0
@@ -131,6 +137,14 @@ ML_PREVIEW = False
 ML_BIT_DEPTH = ML_DEFAULT_BIT_DEPTH
 ML_FEATURE_BIT_DEPTH = ML_DEFAULT_FEATURE_BIT_DEPTH
 ML_N_MELS = ML_DEFAULT_N_MELS
+
+# Phase 3+ DOA-band tuning. Defaults match DEFAULT_FMIN / DEFAULT_FMAX so
+# unchanged sweeps stay byte-compatible; overridden by --fmin / --fmax /
+# --harmonic-comb / --drone-fundamental in main().
+FMIN_HZ = DEFAULT_FMIN
+FMAX_HZ = DEFAULT_FMAX
+HARMONIC_COMB = False
+DRONE_FUNDAMENTAL_HZ = 200.0
 
 
 # ─── Helper functions ─────────────────────────────────────────────────────────
@@ -257,7 +271,9 @@ def run_single_trial(array_R, true_az_deg, true_el_deg, rt60, drone_spl_db,
                      crosstalk_model=None, crosstalk_corner_hz=None,
                      crosstalk_coupling_db=None, crosstalk_fir_path=None,
                      ml_preview=None, ml_bit_depth=None,
-                     ml_feature_bit_depth=None, ml_n_mels=None):
+                     ml_feature_bit_depth=None, ml_n_mels=None,
+                     fmin_hz=None, fmax_hz=None,
+                     harmonic_comb=None, drone_fundamental_hz=None):
     """Run one static-source batch trial.
 
     Atmosphere parameters default to the module-level ``TEMPERATURE_C``,
@@ -287,6 +303,12 @@ def run_single_trial(array_R, true_az_deg, true_el_deg, rt60, drone_spl_db,
     ml_feature_bit_depth = (ML_FEATURE_BIT_DEPTH if ml_feature_bit_depth is None
                             else int(ml_feature_bit_depth))
     ml_n_mels = (ML_N_MELS if ml_n_mels is None else int(ml_n_mels))
+
+    fmin_hz = (FMIN_HZ if fmin_hz is None else float(fmin_hz))
+    fmax_hz = (FMAX_HZ if fmax_hz is None else float(fmax_hz))
+    harmonic_comb = (HARMONIC_COMB if harmonic_comb is None else bool(harmonic_comb))
+    drone_fundamental_hz = (DRONE_FUNDAMENTAL_HZ if drone_fundamental_hz is None
+                            else float(drone_fundamental_hz))
 
     rng = np.random.default_rng(seed)
 
@@ -392,8 +414,12 @@ def run_single_trial(array_R, true_az_deg, true_el_deg, rt60, drone_spl_db,
         for sig in mic_signals
     ])
 
-    df = FS / NFFT
-    freq_bins = np.arange(int(FMIN / df), int(FMAX / df))
+    freq_bins = build_freq_bin_mask(
+        FS, NFFT,
+        fmin_hz=fmin_hz, fmax_hz=fmax_hz,
+        harmonic_comb=harmonic_comb,
+        f0_hz=drone_fundamental_hz,
+    )
 
     doa = pra.doa.SRP(
         array_R, FS, NFFT, c=C, num_src=1, dim=3,
@@ -1222,6 +1248,20 @@ def main():
     parser.add_argument("--ml-n-mels", type=int, default=None, metavar="N",
                         help="Number of mel bands for ML-path feature extractor "
                              "(Phase 3). Default 64.")
+    parser.add_argument("--fmin", type=float, default=None, metavar="HZ",
+                        help="SRP-PHAT band lower edge in Hz (Phase 3+). "
+                             "Default 200.")
+    parser.add_argument("--fmax", type=float, default=None, metavar="HZ",
+                        help="SRP-PHAT band upper edge in Hz (Phase 3+). "
+                             "Default 2000.")
+    parser.add_argument("--harmonic-comb", action="store_true",
+                        help="Restrict SRP-PHAT bins to a +/-10 Hz window "
+                             "around each harmonic n*f0 of the drone "
+                             "fundamental (Phase 3+).")
+    parser.add_argument("--drone-fundamental", type=float, default=None,
+                        metavar="HZ",
+                        help="Drone blade-pass fundamental f0 in Hz used by "
+                             "--harmonic-comb (Phase 3+). Default 200.")
     args = parser.parse_args()
 
     global MATERIALS_PROFILE, MATERIALS_PROFILE_RT60, PLOT_SUFFIX
@@ -1231,6 +1271,7 @@ def main():
     global CROSSTALK_MODEL, CROSSTALK_CORNER_HZ, CROSSTALK_COUPLING_DB
     global CROSSTALK_FIR_PATH
     global ML_PREVIEW, ML_BIT_DEPTH, ML_FEATURE_BIT_DEPTH, ML_N_MELS
+    global FMIN_HZ, FMAX_HZ, HARMONIC_COMB, DRONE_FUNDAMENTAL_HZ
 
     if args.temperature is not None:
         TEMPERATURE_C = float(args.temperature)
@@ -1268,6 +1309,21 @@ def main():
         print(f"[phase3] crowd_model={CROWD_MODEL}  "
               f"crosstalk_model={CROSSTALK_MODEL}  "
               f"ml_preview={'ON' if ML_PREVIEW else 'off'}")
+
+    if args.fmin is not None:
+        FMIN_HZ = float(args.fmin)
+    if args.fmax is not None:
+        FMAX_HZ = float(args.fmax)
+    if args.harmonic_comb:
+        HARMONIC_COMB = True
+    if args.drone_fundamental is not None:
+        DRONE_FUNDAMENTAL_HZ = float(args.drone_fundamental)
+
+    if (FMIN_HZ != DEFAULT_FMIN or FMAX_HZ != DEFAULT_FMAX
+            or HARMONIC_COMB):
+        comb_tag = (f"comb ON @ f0={DRONE_FUNDAMENTAL_HZ:.0f} Hz"
+                    if HARMONIC_COMB else "comb off")
+        print(f"[doa-band] band={FMIN_HZ:.0f}-{FMAX_HZ:.0f} Hz  {comb_tag}")
 
     if args.materials_profile:
         MATERIALS_PROFILE = args.materials_profile

@@ -27,6 +27,18 @@ MIC_NOISE_FLOOR_DB = 30.0  # typical MEMS self-noise equivalent SPL
 CROSSTALK_COUPLING_DB_DEFAULT = -40.0  # neighbour channel leakage (voltage dB)
 CODEC_BIT_DEPTH_DEFAULT = 16           # typical I2S/TDM codec
 
+# ── SRP-PHAT band + harmonic-comb defaults ────────────────────────────────────
+#
+# These are the pre-existing "200-2000 Hz flat band" defaults that the live
+# and batch pipelines have used since Phase 1. They live here so sim_server
+# and run_comparison share one source of truth and stay byte-compatible
+# with earlier sweeps.
+
+DEFAULT_FMIN = 200.0                # lower edge of SRP-PHAT band (Hz)
+DEFAULT_FMAX = 2000.0               # upper edge of SRP-PHAT band (Hz)
+DEFAULT_HARMONIC_TOL_HZ = 10.0      # +/- tolerance around each n*f0 harmonic
+DEFAULT_HARMONIC_MAX_ORDER = 20     # stop the comb after this many harmonics
+
 
 def spl_to_amplitude(spl_db):
     """Convert dB SPL at 1 m to RMS pressure in Pascals.
@@ -692,6 +704,83 @@ def compute_top_n_peaks(power_grid, az_grid, colat_grid, n=3,
     return peaks
 
 
+# ── SRP-PHAT bin selection: flat band + optional harmonic comb ────────────────
+#
+# pra.doa.SRP.locate_sources accepts an arbitrary list of STFT bin indices via
+# its freq_bins argument. We use that to implement two modes:
+#
+#   - "flat": every bin whose centre is in [fmin, fmax].
+#   - "harmonic_comb": the subset of those bins that also sit within
+#     harmonic_tol_hz of n * f0 for n = 1 .. max_harmonics. This imitates a
+#     matched-filter front-end tuned to a known drone's blade-pass frequency
+#     and its harmonics.
+#
+# When the comb is requested but the resulting bin set is empty (e.g. f0 is
+# outside the band), we fall back to the flat band so SRP never crashes --
+# this keeps the UI forgiving of bad slider combinations.
+
+def build_freq_bin_mask(fs, n_fft, fmin_hz, fmax_hz,
+                        harmonic_comb=False, f0_hz=0.0,
+                        harmonic_tol_hz=DEFAULT_HARMONIC_TOL_HZ,
+                        max_harmonics=DEFAULT_HARMONIC_MAX_ORDER):
+    """Return the STFT bin indices SRP-PHAT should integrate over.
+
+    Parameters
+    ----------
+    fs : int
+        Sample rate in Hz.
+    n_fft : int
+        STFT length in samples.
+    fmin_hz, fmax_hz : float
+        Inclusive lower / upper edge of the SRP-PHAT band.
+    harmonic_comb : bool
+        If True, restrict the output to bins within ``harmonic_tol_hz`` of
+        n * f0_hz for n = 1 .. max_harmonics that also fall inside
+        [fmin_hz, fmax_hz].
+    f0_hz : float
+        Drone fundamental (blade-pass) frequency in Hz. Ignored when
+        ``harmonic_comb`` is False.
+    harmonic_tol_hz : float
+        Half-width of the accept window around each harmonic centre.
+    max_harmonics : int
+        Stop after this many harmonics even if higher ones still fit in
+        the band.
+
+    Returns
+    -------
+    ndarray of int
+        Bin indices to pass as ``freq_bins=`` to ``pra.doa.SRP.locate_sources``.
+    """
+    fs = float(fs)
+    n_fft = int(n_fft)
+    df = fs / n_fft
+    n_bins = n_fft // 2 + 1
+
+    lo = max(0, int(np.floor(float(fmin_hz) / df)))
+    hi = min(n_bins, int(np.ceil(float(fmax_hz) / df)) + 1)
+    if hi <= lo:
+        hi = min(n_bins, lo + 1)
+    flat = np.arange(lo, hi, dtype=np.int64)
+
+    if not harmonic_comb or float(f0_hz) <= 0.0:
+        return flat
+
+    flat_centres_hz = flat * df
+    tol = float(harmonic_tol_hz)
+    keep = np.zeros(flat.size, dtype=bool)
+    for n in range(1, int(max_harmonics) + 1):
+        centre = n * float(f0_hz)
+        if centre > float(fmax_hz) + tol:
+            break
+        keep |= np.abs(flat_centres_hz - centre) <= tol
+
+    combed = flat[keep]
+    if combed.size == 0:
+        # Defensive fallback -- comb landed outside the band or tol too tight.
+        return flat
+    return combed
+
+
 # ── Phase 3A: MAX78000 fixed-point ML-path preview ────────────────────────────
 #
 # These helpers simulate what the beamformed signal looks like after an
@@ -847,9 +936,37 @@ def feature_snr_db(reference_features, quantized_features):
     return ml_path_snr_db(r, q)
 
 
+def _hz_to_mel(f_hz):
+    return 2595.0 * np.log10(1.0 + np.asarray(f_hz, dtype=np.float64) / 700.0)
+
+
+def _nice_hz_ticks(fmin_hz, fmax_hz):
+    """Pick ~6-8 round Hz values inside [fmin, fmax] for axis ticks.
+
+    The candidate set covers audio-range decades so the same routine works
+    whether the user picked a narrow 200-2000 Hz band or a wide 50-7000 Hz
+    band. Only ticks that actually fall inside the band are kept.
+    """
+    candidates = [50, 100, 200, 300, 500, 700,
+                  1000, 1500, 2000, 3000, 4000, 5000, 7000, 10000]
+    lo = float(fmin_hz)
+    hi = float(fmax_hz)
+    ticks = [f for f in candidates if lo <= f <= hi]
+    # Always pin the endpoints so the user can read the band edges.
+    ticks = sorted(set([int(round(lo))] + ticks + [int(round(hi))]))
+    return ticks
+
+
 def render_spectrogram_png_b64(features_db, fs, n_mels,
                                fmin=ML_DEFAULT_FMIN, fmax=ML_DEFAULT_FMAX):
     """Render a (n_mels, T) log-mel spectrogram to a small PNG as base64.
+
+    The y-axis is placed in **mel-band-index space** so each image row
+    sits at its correct mel position. Hz tick labels are then drawn at
+    the mel-warped positions that correspond to round audio frequencies
+    (100, 200, 500, 1k, 2k, ...), so what you read on the axis is what
+    the physics actually says. This avoids the "labels linear in Hz but
+    content logarithmic in mel" mismatch the earlier renderer had.
 
     Uses matplotlib's Agg backend so it works headless inside FastAPI.
     Returns the base64 string without the ``data:image/png;base64,`` prefix.
@@ -864,15 +981,40 @@ def render_spectrogram_png_b64(features_db, fs, n_mels,
     if features_db.size == 0:
         features_db = np.zeros((int(n_mels), 1), dtype=np.float64)
 
+    n_mels_int = int(features_db.shape[0])
+    fmin_f = float(fmin)
+    fmax_f = float(fmax)
+
     fig, ax = plt.subplots(figsize=(4.8, 2.4), dpi=100)
     duration_s = float(features_db.shape[1]) * ML_DEFAULT_HOP / float(fs)
+
+    # y-axis is mel-band index; imshow rows land at y = 0 .. n_mels-1
+    # (origin="lower" means row 0 is at the bottom).
     im = ax.imshow(
         features_db, aspect="auto", origin="lower",
-        extent=[0.0, max(duration_s, 1e-3), float(fmin), float(fmax)],
+        extent=[0.0, max(duration_s, 1e-3), -0.5, n_mels_int - 0.5],
         cmap="magma",
     )
+
+    # Map round Hz values to the mel-fractional row they correspond to.
+    mel_min = float(_hz_to_mel(fmin_f))
+    mel_max = float(_hz_to_mel(fmax_f))
+    mel_span = max(mel_max - mel_min, 1e-9)
+    tick_hz = _nice_hz_ticks(fmin_f, fmax_f)
+    tick_positions = [
+        (float(_hz_to_mel(hz)) - mel_min) / mel_span * (n_mels_int - 1)
+        for hz in tick_hz
+    ]
+    tick_labels = [
+        (f"{hz} Hz" if hz < 1000 else f"{hz / 1000:g} kHz")
+        for hz in tick_hz
+    ]
+    ax.set_yticks(tick_positions)
+    ax.set_yticklabels(tick_labels)
+    ax.set_ylim(-0.5, n_mels_int - 0.5)
+
     ax.set_xlabel("time (s)")
-    ax.set_ylabel("freq (Hz)")
+    ax.set_ylabel("freq (mel-scaled)")
     ax.set_title("ML path: log-mel features")
     fig.colorbar(im, ax=ax, label="dB")
     fig.tight_layout()
