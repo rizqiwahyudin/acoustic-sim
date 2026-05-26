@@ -1,4 +1,4 @@
-# Simulation Limitations -- Phase 1 + 2a + 2b + 3 + DOA-band tuning
+# Simulation Limitations -- Phase 1 + 2a + 2b + 3 + DOA-band tuning + Custom arrays
 
 This document inventories what our `pyroomacoustics`-based simulation
 **can** and **cannot** tell us, so that conclusions drawn from the
@@ -19,6 +19,15 @@ drone-detection build.
 > never crashes. All three knobs default to the Phase 3 baseline so
 > existing sweeps, URL presets, and `tests/test_parity.py` cases stay
 > byte-compatible. See §2d below for the remaining simplifications.
+
+> **What's new in Phase 3++ (custom arrays + Live Sim layout).** The
+> Live Sim and Beam Pattern tabs now accept `geometry="CUSTOM"` with
+> explicit `[x, y, z]` microphone offsets in metres from the array
+> centre. The backend clips out-of-room microphones to the same
+> `MARGIN` used for sources and returns `mic_clip_notes` diagnostics
+> for the UI banner. The model remains omni point receivers only:
+> custom geometry changes positions, not per-mic directivity,
+> orientation, housing diffraction, or per-channel calibration.
 
 > **What's new in Phase 3.** The pipeline now includes a fixed-point
 > **MAX78000 ML-path preview** (beamformed audio is re-quantized to

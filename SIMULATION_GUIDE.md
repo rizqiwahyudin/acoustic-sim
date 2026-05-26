@@ -71,6 +71,10 @@
 >
 > See **[LIMITATIONS.md §2d](LIMITATIONS.md)** for the remaining simplifications (rectangular +/- 10 Hz weighting, user-supplied f0, no sub-band voting, no MVDR adaptation).
 
+> **Phase 3++ custom-array + Live Sim layout update.** The Live Sim and Beam Pattern tabs now include a **Custom** geometry. Add microphones as `[x, y, z]` offsets in metres from the array centre, for example `[0.01, 0, 0]` for 10 mm to the right. The editor supports Add/Enter, per-row remove, Clear all, Seed from preset, and JSON/text import of coordinate lists. Clicking a mic row highlights that mic in yellow in the 3D view and in the 2D top-down scatter preview.
+>
+> In Live Sim, Custom mode hides Mic Count / Radius / Ring Separation and replaces them with `Mic count (derived): N`. The Run Simulation button is fixed in the lower-right corner and is hard-disabled until `N >= 2`. If a custom mic lies outside the room, the server clips it to the 0.3 m wall margin and returns a sticky inline clipping banner above the mic list. The Live Sim controls are now split into a Basic view plus a closed-by-default **Advanced settings** section so crowd details, hardware impairments, ML preview, atmosphere, DOA band, moving source, seed, and audio-normalization knobs do not crowd the main controls.
+
 This document describes the simulation system used to evaluate microphone array geometries for acoustic direction-of-arrival (DOA) estimation. It covers the physical models, algorithms, design decisions, known limitations, and the scope of valid conclusions.
 
 ---

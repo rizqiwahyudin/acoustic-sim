@@ -587,5 +587,64 @@ def test_harmonic_comb_locks_onto_tonal_drone(monkeypatch):
     )
 
 
+# ── Phase 3++ Custom arrays ───────────────────────────────────────────────────
+
+def test_custom_matches_uca_when_fed_uca_positions(monkeypatch):
+    """A CUSTOM array fed the exact UCA offsets must match the built-in UCA
+    live path. This guards coordinate conventions: custom positions are
+    centre-relative [x, y, z] metres, not absolute room coordinates.
+    """
+    _force_synthetic_audio(monkeypatch)
+    seed = 83
+
+    req_uca = _make_req(seed, geometry="UCA")
+    center = np.array([req_uca.room_length, req_uca.room_width, req_uca.room_height])
+    center = center / 2.0
+    center[2] = 1.0
+    uca_R = sim_server.make_uca(center, req_uca.mic_count, req_uca.radius)
+    custom_offsets = (uca_R - center[:, None]).T.tolist()
+
+    req_custom = _make_req(seed, geometry="CUSTOM")
+    req_custom.custom_mic_positions = custom_offsets
+
+    np.random.seed(seed)
+    r_uca = run_live_trial(req_uca)
+    np.random.seed(seed)
+    r_custom = run_live_trial(req_custom)
+
+    _assert_doa_match(
+        r_custom,
+        r_uca["est_az_deg"], r_uca["est_el_deg"],
+        tol_deg=0.01,
+        context="CUSTOM fed built-in UCA offsets",
+    )
+    assert r_custom["mic_clip_notes"] == []
+    assert np.allclose(r_custom["mic_positions"], custom_offsets, atol=1e-9)
+
+
+def test_custom_out_of_room_positions_are_clipped(monkeypatch):
+    """Absurd custom mic offsets should be clipped to the room margin and
+    surfaced as diagnostics, not crash the trial.
+    """
+    _force_synthetic_audio(monkeypatch)
+    seed = 89
+    req = _make_req(seed, geometry="CUSTOM")
+    req.custom_mic_positions = [
+        [1e6, 0.0, 0.0],
+        [-0.10, 0.0, 0.0],
+        [0.0, 0.10, 0.0],
+    ]
+
+    np.random.seed(seed)
+    result = run_live_trial(req)
+
+    notes = result["mic_clip_notes"]
+    assert notes, "expected at least one clipping diagnostic"
+    assert any(n["idx"] == 0 and n["axis"] == "x" for n in notes)
+    assert len(result["mic_positions"]) == 3
+    assert result["est_az_deg"] is not None
+    assert result["est_el_deg"] is not None
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

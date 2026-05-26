@@ -16,7 +16,7 @@ import time
 import numpy as np
 import pyroomacoustics as pra
 import scipy.io.wavfile as wavfile
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -36,6 +36,7 @@ from acoustic_utils import (
     feature_snr_db,
     load_crosstalk_fir,
     log_mel_features,
+    make_custom,
     make_trajectory,
     measure_rt60_from_rir,
     ml_path_quantize_audio,
@@ -159,15 +160,29 @@ def make_cylinder(center, mic_count=12, radius=0.15, separation=0.12):
     ])
 
 
-def build_array(geometry, center, mic_count, radius, ring_separation):
+def build_array(geometry, center, mic_count, radius, ring_separation,
+                room_dim=None, custom_mic_positions=None):
     if geometry == "UCA":
-        return make_uca(center, mic_count, radius)
+        return make_uca(center, mic_count, radius), []
     elif geometry == "CROSS":
-        return make_cross(center, mic_count, radius)
+        return make_cross(center, mic_count, radius), []
     elif geometry == "ULA":
-        return make_ula(center, mic_count, radius * 2)
+        return make_ula(center, mic_count, radius * 2), []
     elif geometry == "CYLINDER":
-        return make_cylinder(center, mic_count, radius, ring_separation)
+        return make_cylinder(center, mic_count, radius, ring_separation), []
+    elif geometry == "CUSTOM":
+        if not custom_mic_positions or len(custom_mic_positions) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="CUSTOM requires >= 2 mic positions",
+            )
+        try:
+            return make_custom(
+                center, custom_mic_positions,
+                room_dim=room_dim, margin=MARGIN,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise ValueError(f"Unknown geometry: {geometry}")
 
 
@@ -304,6 +319,7 @@ app.add_middleware(
 
 class SimRequest(BaseModel):
     geometry: str = "UCA"
+    custom_mic_positions: list[list[float]] | None = None
     mic_count: int = 12
     radius: float = 0.15
     ring_separation: float = 0.12
@@ -397,8 +413,12 @@ def run_live_trial(req: SimRequest) -> dict:
     array_center = room_dim / 2
     array_center[2] = 1.0
 
-    array_R = build_array(req.geometry, array_center, req.mic_count,
-                          req.radius, req.ring_separation)
+    array_R, mic_clip_notes = build_array(
+        req.geometry, array_center, req.mic_count,
+        req.radius, req.ring_separation,
+        room_dim=room_dim,
+        custom_mic_positions=req.custom_mic_positions,
+    )
 
     sigma2 = spl_to_amplitude(req.mic_noise_floor_db) ** 2
 
@@ -668,6 +688,7 @@ def run_live_trial(req: SimRequest) -> dict:
         "true_az_deg": req.source_az_deg,
         "true_el_deg": req.source_el_deg,
         "mic_positions": mic_rel,
+        "mic_clip_notes": mic_clip_notes,
         "audio_b64": bf_b64,
         "raw_audio_b64": raw_b64,
         "unsteered_audio_b64": unsteered_b64,

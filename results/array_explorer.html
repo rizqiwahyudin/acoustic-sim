@@ -26,7 +26,7 @@ h2{font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;co
 .ctrl-row label{display:block;font-size:10.5px;font-weight:500;color:#888;margin-bottom:3px;font-family:'DM Mono',monospace}
 .ctrl-row select,.ctrl-row input[type=range]{width:100%;background:#1a1a2e;color:#e0e0e0;border:1px solid #333;border-radius:5px;padding:4px 7px;font-family:'DM Mono',monospace;font-size:11px}
 .ctrl-row select:focus{outline:1px solid #7ecfff}
-input[type=range]{-webkit-appearance:none;height:5px;border-radius:3px;background:#2a2a3e;padding:0}
+input[type=range]{-webkit-appearance:none;appearance:none;height:5px;border-radius:3px;background:#2a2a3e;padding:0}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#7ecfff;cursor:pointer}
 .toggle-row{display:flex;gap:6px;margin-bottom:12px}
 .toggle-btn{flex:1;padding:6px 0;text-align:center;font-family:'DM Mono',monospace;font-size:11px;font-weight:500;
@@ -39,6 +39,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   font-family:'DM Mono',monospace;font-size:12px;font-weight:500;cursor:pointer;transition:background 0.2s;letter-spacing:0.5px}
 .run-btn:hover{background:#2080cc}
 .run-btn:disabled{background:#333;color:#666;cursor:not-allowed}
+.run-btn-fixed{position:fixed;right:24px;bottom:24px;z-index:1000;padding:12px 22px;background:#1a6baa;color:#fff;border:none;border-radius:8px;
+  font-family:'DM Mono',monospace;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,0.4);letter-spacing:0.5px}
+.run-btn-fixed:hover{background:#2080cc}
+.run-btn-fixed:disabled{opacity:0.45;cursor:not-allowed;background:#333;color:#aaa}
 .check-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .check-row label{margin:0;font-size:10.5px;font-weight:500;color:#888;font-family:'DM Mono',monospace}
 .check-row input[type=checkbox]{accent-color:#7ecfff;width:14px;height:14px}
@@ -86,6 +90,27 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 .hw-preset-btn{width:100%;padding:6px 0;margin:4px 0 8px 0;background:#3a1a1a;color:#ffaaaa;border:1px solid #6a2a2a;border-radius:5px;
   font-family:'DM Mono',monospace;font-size:10px;cursor:pointer;transition:all 0.15s}
 .hw-preset-btn:hover{background:#5a2a2a;color:#ffcccc}
+.advanced-settings{border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px;margin-top:8px;background:rgba(255,255,255,0.025)}
+.advanced-settings summary{cursor:pointer;font-family:'DM Mono',monospace;font-size:10.5px;color:#7ecfff;list-style:none;user-select:none}
+.advanced-settings summary::-webkit-details-marker{display:none}
+.advanced-settings summary::before{content:'> ';color:#888}
+.advanced-settings[open] summary::before{content:'v '}
+.custom-array-block{border:1px solid rgba(126,207,255,0.22);border-radius:8px;padding:8px;margin:8px 0;background:rgba(126,207,255,0.04)}
+.custom-add-row{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:5px}
+.custom-add-row input{min-width:0;background:#1a1a2e;color:#e0e0e0;border:1px solid #333;border-radius:5px;padding:4px 6px;font-family:'DM Mono',monospace;font-size:10.5px}
+.custom-add-row button,.custom-actions button,.custom-remove,.custom-clip-dismiss{background:#1a2a3e;color:#7ecfff;border:1px solid #2a4a6a;border-radius:5px;padding:4px 7px;font-family:'DM Mono',monospace;font-size:10px;cursor:pointer}
+.custom-mic-count{display:inline-block;margin:2px 0 6px 0;padding:3px 6px;border-radius:999px;background:#10263a;color:#7ecfff;font-family:'DM Mono',monospace;font-size:10px}
+.custom-list{max-height:130px;overflow-y:auto;border:1px solid rgba(255,255,255,0.08);border-radius:6px;margin:6px 0;background:rgba(0,0,0,0.18)}
+.custom-list-empty{padding:8px;color:#666;font-family:'DM Mono',monospace;font-size:10px}
+.custom-row{display:grid;grid-template-columns:28px 1fr auto;gap:5px;align-items:center;padding:5px 6px;border-bottom:1px solid rgba(255,255,255,0.05);font-family:'DM Mono',monospace;font-size:10px;color:#aaa;cursor:pointer}
+.custom-row:last-child{border-bottom:none}
+.custom-row.selected{background:rgba(255,221,68,0.12);color:#ffdd44}
+.custom-remove{padding:1px 6px;color:#ffaaaa;border-color:#6a2a2a;background:#3a1a1a}
+#customScatter{width:100%;height:150px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);background:#08080d;display:block;margin:6px 0}
+.custom-actions{display:flex;gap:5px}
+.custom-actions button{flex:1}
+.custom-clip-banner{position:sticky;top:0;z-index:2;margin:4px 0;padding:6px 7px;border:1px solid #7a5514;border-radius:6px;background:rgba(120,75,10,0.92);color:#ffdd99;font-family:'DM Mono',monospace;font-size:9.5px;line-height:1.45}
+.custom-clip-banner .custom-clip-dismiss{float:right;padding:0 5px;margin-left:6px;background:#4a2a08;color:#ffdd99;border-color:#a86a20}
 
 /* SRP heatmap + top-N candidates */
 #heatmapWrap{margin-top:6px}
@@ -125,20 +150,21 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 
   <!-- Beam pattern controls -->
   <div id="beamControls">
-    <div class="ctrl-row">
+    <div class="ctrl-row" id="beamGeoRow">
       <label>Geometry</label>
       <select id="selGeo">
         <option value="UCA">UCA (Circular Ring)</option>
         <option value="CROSS">Standing Cross</option>
         <option value="ULA">ULA (Linear)</option>
         <option value="CYLINDER">Cylinder (Stacked Rings)</option>
+        <option value="CUSTOM">Custom</option>
       </select>
     </div>
-    <div class="ctrl-row">
+    <div class="ctrl-row" id="beamMicCountRow">
       <label>Mic Count: <span id="micCountVal">12</span></label>
       <input type="range" id="micCount" min="4" max="32" step="1" value="12">
     </div>
-    <div class="ctrl-row">
+    <div class="ctrl-row" id="beamRadiusRow">
       <label>Array Radius: <span id="radiusVal">0.15</span> m</label>
       <input type="range" id="arrayRadius" min="0.03" max="1.0" step="0.01" value="0.15">
     </div>
@@ -173,22 +199,46 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
   </div>
 
+  <div id="customArrayBlock" class="custom-array-block hidden">
+    <div class="ctrl-row">
+      <label>Add mic (metres, offset from centre)</label>
+      <div class="custom-add-row">
+        <input id="customAddX" type="number" step="0.001" placeholder="x">
+        <input id="customAddY" type="number" step="0.001" placeholder="y">
+        <input id="customAddZ" type="number" step="0.001" placeholder="z">
+        <button id="btnCustomAdd" type="button">+ Add</button>
+      </div>
+    </div>
+    <div class="custom-mic-count">Mic count (derived): <span id="customMicCount">0</span></div>
+    <div id="customClipBanner" class="custom-clip-banner hidden"></div>
+    <div id="customList" class="custom-list"></div>
+    <canvas id="customScatter" width="260" height="150"></canvas>
+    <div class="custom-actions">
+      <button id="btnCustomSeed" type="button">Seed from preset</button>
+      <button id="btnCustomClear" type="button">Clear all</button>
+      <button id="btnCustomImport" type="button">Import file...</button>
+      <input id="customFile" type="file" accept=".json,.txt" style="display:none">
+    </div>
+  </div>
+
   <!-- Live Sim controls -->
   <div id="liveControls" class="hidden">
-    <div class="ctrl-row">
+    <div class="live-basic">
+    <div class="ctrl-row" id="liveGeoRow">
       <label>Geometry</label>
       <select id="liveGeo">
         <option value="UCA">UCA (Circular Ring)</option>
         <option value="CROSS">Standing Cross</option>
         <option value="ULA">ULA (Linear)</option>
         <option value="CYLINDER">Cylinder (Stacked Rings)</option>
+        <option value="CUSTOM">Custom</option>
       </select>
     </div>
-    <div class="ctrl-row">
+    <div class="ctrl-row" id="liveMicCountRow">
       <label>Mic Count: <span id="liveMicVal">12</span></label>
       <input type="range" id="liveMicCount" min="4" max="32" step="1" value="12">
     </div>
-    <div class="ctrl-row">
+    <div class="ctrl-row" id="liveRadiusRow">
       <label>Radius: <span id="liveRadVal">0.15</span> m</label>
       <input type="range" id="liveRadius" min="0.03" max="1.0" step="0.01" value="0.15">
     </div>
@@ -244,6 +294,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <label>Drone SPL: <span id="liveDroneSPLVal">78</span> dB @ 1m</label>
       <input type="range" id="liveDroneSPL" min="60" max="95" step="1" value="78">
     </div>
+    <div class="check-row">
+      <input type="checkbox" id="liveDiffuse" checked>
+      <label>Realistic room mode (crowd + PA)</label>
+    </div>
+    </div>
+    <details class="advanced-settings" id="liveAdvanced">
+      <summary>Advanced settings</summary>
+    <hr class="sep">
     <div class="ctrl-row">
       <label>Crowd SPL: <span id="liveCrowdSPLVal">67</span> dB @ 1m</label>
       <input type="range" id="liveCrowdSPL" min="55" max="80" step="1" value="67">
@@ -264,11 +322,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="ctrl-row hidden" id="liveSeedRow">
       <label>Seed: <span id="liveSeedVal">0</span></label>
       <input type="range" id="liveSeed" min="0" max="999" step="1" value="0">
-    </div>
-    <hr class="sep">
-    <div class="check-row">
-      <input type="checkbox" id="liveDiffuse" checked>
-      <label>Diffuse noise (crowd + PA)</label>
     </div>
     <div class="ctrl-row">
       <label>Crowd Sources: <span id="liveCrowdVal">30</span></label>
@@ -404,7 +457,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <label>Integration: <span id="liveIntVal">1000</span> ms</label>
       <input type="range" id="liveInt" min="50" max="1000" step="50" value="1000">
     </div>
-    <button class="run-btn" id="btnRun">Run Simulation</button>
+    </details>
   </div>
 
   <hr class="sep">
@@ -417,6 +470,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <input type="range" id="opacity" min="0.1" max="1.0" step="0.05" value="0.70">
   </div>
 </div>
+
+<button id="btnRun" class="run-btn-fixed hidden">Run Simulation</button>
 
 <div id="info" class="panel">
   <div id="infoText"></div>
@@ -542,6 +597,7 @@ function buildGeometry(name, nMics, radius, separation) {
     case 'CROSS': return makeCross(nMics, radius);
     case 'ULA': return makeULA(nMics, radius * 2);
     case 'CYLINDER': return makeCylinder(nMics, radius, separation);
+    case 'CUSTOM': return customMicPositions.map(p => [p[0], p[1], p[2]]);
     default: return makeUCA(nMics, radius);
   }
 }
@@ -644,12 +700,15 @@ scene.add(axesHelper);
 const micGroup = new THREE.Group();
 scene.add(micGroup);
 
-function renderMics(mics) {
+function renderMics(mics, selectedIdx = -1) {
   micGroup.clear();
   const geo = new THREE.SphereGeometry(0.02, 8, 8);
   const mat = new THREE.MeshPhongMaterial({color: 0x7ecfff, emissive: 0x112233});
-  for (const p of mics) {
-    const m = new THREE.Mesh(geo, mat);
+  const selectedMat = new THREE.MeshPhongMaterial({color: 0xffdd44, emissive: 0x443300});
+  for (let i = 0; i < mics.length; i++) {
+    const p = mics[i];
+    const material = (i === selectedIdx) ? selectedMat : mat;
+    const m = new THREE.Mesh(geo, material);
     m.position.set(p[0], p[2], p[1]);
     micGroup.add(m);
   }
@@ -937,6 +996,9 @@ function srpToPowerGrid(spec) {
 let mode = 'beam'; // 'beam' or 'srp'
 let currentMics = [];
 let currentPower = [];
+let customMicPositions = [];
+let customSelectedIdx = -1;
+let customSeedGeometry = 'UCA';
 
 // ── DOM refs ──
 const elSelGeo = document.getElementById('selGeo');
@@ -954,6 +1016,224 @@ const elHeatmapCanvas = document.getElementById('heatmapCanvas');
 const elHeatmapRange = document.getElementById('heatmapRange');
 const elTopCand = document.getElementById('topCandidates');
 
+function fmtCoord(v) {
+  return Number(v).toFixed(4).replace(/\.?0+$/, '');
+}
+
+function validateMicTriple(p) {
+  return Array.isArray(p) && p.length === 3 && p.every(v => Number.isFinite(Number(v)));
+}
+
+function clearCustomClipNotes() {
+  const banner = document.getElementById('customClipBanner');
+  if (!banner) return;
+  banner.classList.add('hidden');
+  banner.innerHTML = '';
+}
+
+function setCustomClipNotes(notes) {
+  const banner = document.getElementById('customClipBanner');
+  if (!banner) return;
+  if (!notes || notes.length === 0) {
+    clearCustomClipNotes();
+    return;
+  }
+  const lines = notes.map(n => {
+    const micNo = (Number.isInteger(n.idx) ? n.idx + 1 : '?');
+    return `Mic #${micNo} clipped on ${n.axis}: ${Number(n.before).toFixed(3)} -> ${Number(n.after).toFixed(3)} m`;
+  });
+  banner.innerHTML = `<button type="button" class="custom-clip-dismiss" id="btnCustomClipDismiss">x</button>${lines.join('<br>')}`;
+  banner.classList.remove('hidden');
+  document.getElementById('btnCustomClipDismiss').addEventListener('click', clearCustomClipNotes);
+}
+
+function updateRunEnabled() {
+  const btn = document.getElementById('btnRun');
+  if (!btn) return;
+  const isCustom = document.getElementById('liveGeo').value === 'CUSTOM';
+  btn.disabled = isCustom && customMicPositions.length < 2;
+}
+
+function updateCustomArrayVisibility() {
+  const block = document.getElementById('customArrayBlock');
+  if (!block) return;
+
+  const beamCustom = mode === 'beam' && elSelGeo.value === 'CUSTOM';
+  const liveCustom = mode === 'live' && document.getElementById('liveGeo').value === 'CUSTOM';
+  if (beamCustom) {
+    document.getElementById('beamGeoRow').insertAdjacentElement('afterend', block);
+  } else if (liveCustom) {
+    document.getElementById('liveGeoRow').insertAdjacentElement('afterend', block);
+  }
+  block.classList.toggle('hidden', !(beamCustom || liveCustom));
+
+  document.getElementById('beamMicCountRow').classList.toggle('hidden', beamCustom);
+  document.getElementById('beamRadiusRow').classList.toggle('hidden', beamCustom);
+  document.getElementById('sepRow').classList.toggle('hidden', beamCustom || elSelGeo.value !== 'CYLINDER');
+
+  document.getElementById('liveMicCountRow').classList.toggle('hidden', liveCustom);
+  document.getElementById('liveRadiusRow').classList.toggle('hidden', liveCustom);
+  document.getElementById('liveSepRow').classList.toggle('hidden', liveCustom || document.getElementById('liveGeo').value !== 'CYLINDER');
+  updateRunEnabled();
+}
+
+function renderCustomScatter() {
+  const canvas = document.getElementById('customScatter');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#08080d';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(W / 2, 10); ctx.lineTo(W / 2, H - 10);
+  ctx.moveTo(10, H / 2); ctx.lineTo(W - 10, H / 2);
+  ctx.stroke();
+  ctx.fillStyle = '#666';
+  ctx.font = '10px monospace';
+  ctx.fillText('x', W - 14, H / 2 - 4);
+  ctx.fillText('y', W / 2 + 5, 16);
+
+  const maxAbs = Math.max(
+    0.05,
+    ...customMicPositions.flatMap(p => [Math.abs(p[0]), Math.abs(p[1])])
+  );
+  const scale = (Math.min(W, H) * 0.42) / maxAbs;
+  customMicPositions.forEach((p, idx) => {
+    const x = W / 2 + p[0] * scale;
+    const y = H / 2 - p[1] * scale;
+    ctx.beginPath();
+    ctx.arc(x, y, idx === customSelectedIdx ? 5 : 4, 0, 2 * Math.PI);
+    ctx.fillStyle = idx === customSelectedIdx ? '#ffdd44' : '#7ecfff';
+    ctx.fill();
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(String(idx + 1), x + 6, y - 6);
+  });
+}
+
+function renderCustomList() {
+  const list = document.getElementById('customList');
+  if (!list) return;
+  document.getElementById('customMicCount').textContent = String(customMicPositions.length);
+  list.innerHTML = '';
+  if (customMicPositions.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'custom-list-empty';
+    empty.textContent = 'No custom mics yet. Add [x, y, z] offsets in metres.';
+    list.appendChild(empty);
+  } else {
+    customMicPositions.forEach((p, idx) => {
+      const row = document.createElement('div');
+      row.className = 'custom-row' + (idx === customSelectedIdx ? ' selected' : '');
+      row.innerHTML = `<span>#${idx + 1}</span><span>[${fmtCoord(p[0])}, ${fmtCoord(p[1])}, ${fmtCoord(p[2])}] m</span>`;
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'custom-remove';
+      rm.textContent = 'x';
+      rm.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        customRemove(idx);
+      });
+      row.appendChild(rm);
+      row.addEventListener('click', () => setCustomSelected(idx));
+      list.appendChild(row);
+    });
+  }
+  renderCustomScatter();
+  updateRunEnabled();
+}
+
+function refreshAfterCustomMutation() {
+  clearCustomClipNotes();
+  renderCustomList();
+  if (mode === 'beam' && elSelGeo.value === 'CUSTOM') refresh();
+}
+
+function customAdd(x, y, z) {
+  const p = [Number(x), Number(y), Number(z)];
+  if (!validateMicTriple(p)) {
+    alert('Enter finite numeric x, y, z mic offsets.');
+    return;
+  }
+  for (const q of customMicPositions) {
+    const dx = p[0] - q[0], dy = p[1] - q[1], dz = p[2] - q[2];
+    if (Math.sqrt(dx*dx + dy*dy + dz*dz) < 1e-6) {
+      alert('That mic position already exists.');
+      return;
+    }
+  }
+  customMicPositions.push(p);
+  customSelectedIdx = customMicPositions.length - 1;
+  document.getElementById('customAddX').value = '';
+  document.getElementById('customAddY').value = '';
+  document.getElementById('customAddZ').value = '';
+  refreshAfterCustomMutation();
+}
+
+function customRemove(idx) {
+  customMicPositions.splice(idx, 1);
+  if (customSelectedIdx === idx) customSelectedIdx = -1;
+  else if (customSelectedIdx > idx) customSelectedIdx -= 1;
+  refreshAfterCustomMutation();
+}
+
+function customClear() {
+  customMicPositions = [];
+  customSelectedIdx = -1;
+  refreshAfterCustomMutation();
+}
+
+function customSeedFromPreset() {
+  let nMics, radius, sep;
+  if (mode === 'beam') {
+    nMics = parseInt(elMicCount.value);
+    radius = parseFloat(elRadius.value);
+    sep = parseFloat(elSep.value);
+  } else {
+    nMics = parseInt(document.getElementById('liveMicCount').value);
+    radius = parseFloat(document.getElementById('liveRadius').value);
+    sep = parseFloat(document.getElementById('liveSep').value);
+  }
+  customMicPositions = buildGeometry(customSeedGeometry, nMics, radius, sep)
+    .map(p => [Number(p[0]), Number(p[1]), Number(p[2])]);
+  customSelectedIdx = customMicPositions.length ? 0 : -1;
+  refreshAfterCustomMutation();
+}
+
+function customParseFile(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  const normalize = arr => {
+    if (validateMicTriple(arr)) return [arr.map(Number)];
+    if (Array.isArray(arr) && arr.every(validateMicTriple)) return arr.map(p => p.map(Number));
+    throw new Error('Expected [x,y,z] or [[x,y,z], ...].');
+  };
+  try {
+    return normalize(JSON.parse(trimmed));
+  } catch (_) {
+    try {
+      return normalize(JSON.parse(`[${trimmed}]`));
+    } catch (_) {
+      const rows = trimmed.split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line && !line.startsWith('#'))
+        .map(line => line.replace(/[\[\],]/g, ' ').trim().split(/\s+/).map(Number));
+      return normalize(rows);
+    }
+  }
+}
+
+function setCustomSelected(idx) {
+  customSelectedIdx = idx;
+  renderCustomList();
+  if ((mode === 'beam' && elSelGeo.value === 'CUSTOM') ||
+      (mode === 'live' && document.getElementById('liveGeo').value === 'CUSTOM')) {
+    renderMics(currentMics, customSelectedIdx);
+  }
+}
+
 function getParams() {
   return {
     geo: elSelGeo.value,
@@ -970,6 +1250,7 @@ function getParams() {
 
 function refreshBeam() {
   const p = getParams();
+  if (p.geo !== 'CUSTOM') customSeedGeometry = p.geo;
   document.getElementById('micCountVal').textContent = p.nMics;
   document.getElementById('radiusVal').textContent = p.radius.toFixed(2);
   document.getElementById('sepVal').textContent = p.sep.toFixed(2);
@@ -979,14 +1260,21 @@ function refreshBeam() {
   document.getElementById('dispRadVal').textContent = p.dispRadius.toFixed(1);
   document.getElementById('opacityVal').textContent = p.opacity.toFixed(2);
 
-  document.getElementById('sepRow').classList.toggle('hidden', p.geo !== 'CYLINDER');
+  updateCustomArrayVisibility();
 
   currentMics = buildGeometry(p.geo, p.nMics, p.radius, p.sep);
+  if (p.geo === 'CUSTOM' && currentMics.length === 0) {
+    micGroup.clear();
+    beamGroup.clear();
+    steerGroup.clear();
+    elInfo.innerHTML = `<span class="val">CUSTOM</span> -- 0 mics<br>Add mic coordinates to preview a beam pattern.`;
+    return;
+  }
   const steerAzRad = p.steerAz * Math.PI / 180;
   const steerElRad = p.steerEl * Math.PI / 180;
 
   currentPower = computeBeamPattern(currentMics, steerAzRad, steerElRad, p.freq);
-  renderMics(currentMics);
+  renderMics(currentMics, p.geo === 'CUSTOM' ? customSelectedIdx : -1);
   renderSteerDir(steerAzRad, steerElRad, p.dispRadius * 1.15);
   buildPatternMesh(currentPower, p.dispRadius, p.opacity);
 
@@ -1001,14 +1289,16 @@ function refreshBeam() {
 
   elInfo.innerHTML =
     `<span class="val">${p.geo}</span> -- ${currentMics.length} mics<br>` +
-    `Radius: <span class="val">${p.radius.toFixed(2)} m</span>` +
-    (p.geo==='CYLINDER' ? ` / sep: <span class="val">${p.sep.toFixed(2)} m</span>` : '') + `<br>` +
+    (p.geo==='CUSTOM'
+      ? `Custom coordinates: <span class="val">centre-relative</span><br>`
+      : `Radius: <span class="val">${p.radius.toFixed(2)} m</span>` +
+        (p.geo==='CYLINDER' ? ` / sep: <span class="val">${p.sep.toFixed(2)} m</span>` : '') + `<br>`) +
     `Aperture: <span class="val">${aperture.toFixed(3)} m</span><br>` +
     `Adj. spacing: <span class="val">${(adjSpacing*100).toFixed(1)} cm</span><br>` +
     `Freq: <span class="val">${p.freq} Hz</span> (λ = ${wavelength.toFixed(2)} m)<br>` +
     `Steer: az=<span class="val">${p.steerAz}°</span> el=<span class="val">${p.steerEl}°</span><br>` +
     `<hr class="sep">` +
-    `Alias freq: <span class="val">${aliasFreq.toFixed(0)} Hz</span>` +
+    `Alias freq: <span class="val">${Number.isFinite(aliasFreq) ? aliasFreq.toFixed(0) : 'n/a'} Hz</span>` +
     (p.freq > aliasFreq ? ` <span style="color:#ff4444">⚠ ALIASED</span>` : ` <span style="color:#44cc44">OK</span>`) + `<br>` +
     `≈ Beam solid angle: <span class="val">${bw}°²</span>`;
 }
@@ -1068,6 +1358,7 @@ function setMode(m) {
   mode = m;
   ['btnBeam','btnSRP','btnLive'].forEach(id => document.getElementById(id).classList.remove('active'));
   ['beamControls','srpControls','liveControls'].forEach(id => document.getElementById(id).classList.add('hidden'));
+  document.getElementById('btnRun').classList.toggle('hidden', m !== 'live');
   if (m === 'beam') {
     document.getElementById('btnBeam').classList.add('active');
     document.getElementById('beamControls').classList.remove('hidden');
@@ -1081,6 +1372,8 @@ function setMode(m) {
     document.getElementById('liveControls').classList.remove('hidden');
     updateLiveLabels();
   }
+  updateCustomArrayVisibility();
+  renderCustomList();
 }
 document.getElementById('btnBeam').addEventListener('click', () => setMode('beam'));
 document.getElementById('btnSRP').addEventListener('click', () => setMode('srp'));
@@ -1107,7 +1400,8 @@ function updateLiveLabels() {
     if (el) document.getElementById(valId).textContent = el.value;
   }
   const geo = document.getElementById('liveGeo').value;
-  document.getElementById('liveSepRow').classList.toggle('hidden', geo !== 'CYLINDER');
+  if (geo !== 'CUSTOM') customSeedGeometry = geo;
+  updateCustomArrayVisibility();
   const rand = document.getElementById('liveRandSeed').checked;
   document.getElementById('liveSeedRow').classList.toggle('hidden', rand);
   // Heading is only meaningful for straight trajectories -- hide it for arc.
@@ -1123,7 +1417,10 @@ function updateLiveLabels() {
 Object.keys(liveSliders).forEach(id => {
   document.getElementById(id).addEventListener('input', updateLiveLabels);
 });
-document.getElementById('liveGeo').addEventListener('change', updateLiveLabels);
+document.getElementById('liveGeo').addEventListener('change', () => {
+  updateLiveLabels();
+  renderCustomList();
+});
 document.getElementById('liveRandSeed').addEventListener('change', updateLiveLabels);
 
 // ── Live simulation ──
@@ -1169,6 +1466,12 @@ document.getElementById('btnAudioMl').addEventListener('click', () => setAudioMo
 
 async function runLiveSimulation() {
   const btn = document.getElementById('btnRun');
+  const liveGeo = document.getElementById('liveGeo').value;
+  if (liveGeo === 'CUSTOM' && customMicPositions.length < 2) {
+    updateRunEnabled();
+    elInfo.innerHTML = '<span style="color:#ffdd44">CUSTOM requires at least 2 mic positions before running.</span>';
+    return;
+  }
   btn.disabled = true;
   btn.textContent = 'Running...';
   document.getElementById('spinner').classList.add('active');
@@ -1178,7 +1481,8 @@ async function runLiveSimulation() {
 
   const useRand = document.getElementById('liveRandSeed').checked;
   const params = {
-    geometry: document.getElementById('liveGeo').value,
+    geometry: liveGeo,
+    custom_mic_positions: liveGeo === 'CUSTOM' ? customMicPositions.map(p => [p[0], p[1], p[2]]) : null,
     mic_count: parseInt(document.getElementById('liveMicCount').value),
     radius: parseFloat(document.getElementById('liveRadius').value),
     ring_separation: parseFloat(document.getElementById('liveSep').value),
@@ -1249,20 +1553,22 @@ async function runLiveSimulation() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(params),
     });
-    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    if (!resp.ok) {
+      let msg = `Server error: ${resp.status}`;
+      try {
+        const errBody = await resp.json();
+        if (errBody && errBody.detail) msg += ` (${errBody.detail})`;
+      } catch (_) { /* keep status-only error */ }
+      throw new Error(msg);
+    }
     const data = await resp.json();
+    setCustomClipNotes(data.mic_clip_notes || []);
 
     const p = getParams();
     buildPatternMesh(data.power, p.dispRadius, p.opacity);
 
-    micGroup.clear();
-    const mGeo = new THREE.SphereGeometry(0.02, 8, 8);
-    const mMat = new THREE.MeshPhongMaterial({color: 0x7ecfff, emissive: 0x112233});
-    for (const pt of data.mic_positions) {
-      const m = new THREE.Mesh(mGeo, mMat);
-      m.position.set(pt[0], pt[2], pt[1]);
-      micGroup.add(m);
-    }
+    currentMics = data.mic_positions || [];
+    renderMics(currentMics, params.geometry === 'CUSTOM' ? customSelectedIdx : -1);
 
     const sceneScale = renderRoom(data.room_dim, data.array_center);
     renderSources(data.source_pos, data.crowd_positions || [], data.pa_positions || [],
@@ -1368,12 +1674,48 @@ async function runLiveSimulation() {
     trueDirGroup.clear();
   } finally {
     document.getElementById('spinner').classList.remove('active');
-    btn.disabled = false;
     btn.textContent = 'Run Simulation';
+    updateRunEnabled();
   }
 }
 
 document.getElementById('btnRun').addEventListener('click', runLiveSimulation);
+document.getElementById('btnCustomAdd').addEventListener('click', () => {
+  customAdd(
+    document.getElementById('customAddX').value,
+    document.getElementById('customAddY').value,
+    document.getElementById('customAddZ').value
+  );
+});
+['customAddX','customAddY','customAddZ'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      document.getElementById('btnCustomAdd').click();
+    }
+  });
+});
+document.getElementById('btnCustomSeed').addEventListener('click', customSeedFromPreset);
+document.getElementById('btnCustomClear').addEventListener('click', customClear);
+document.getElementById('btnCustomImport').addEventListener('click', () => {
+  document.getElementById('customFile').click();
+});
+document.getElementById('customFile').addEventListener('change', (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      customMicPositions = customParseFile(e.target.result);
+      customSelectedIdx = customMicPositions.length ? 0 : -1;
+      refreshAfterCustomMutation();
+    } catch (err) {
+      alert('Invalid custom mic file: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  ev.target.value = '';
+});
 
 // ── Phase 2a: materials / impairments / presets / heatmap ──
 
@@ -1610,11 +1952,12 @@ const PRESET_CHECK_IDS = [
 ];
 
 function captureState() {
-  const s = {v: 1, sliders: {}, selects: {}, checks: {}, absMode: ''};
+  const s = {v: 1, sliders: {}, selects: {}, checks: {}, absMode: '', customMicPositions: []};
   for (const id of PRESET_SLIDER_IDS) s.sliders[id] = document.getElementById(id).value;
   for (const id of PRESET_SELECT_IDS) s.selects[id] = document.getElementById(id).value;
   for (const id of PRESET_CHECK_IDS)  s.checks[id]  = document.getElementById(id).checked;
   s.absMode = document.querySelector('input[name="absMode"]:checked').value;
+  s.customMicPositions = customMicPositions.map(p => [p[0], p[1], p[2]]);
   return s;
 }
 
@@ -1639,7 +1982,19 @@ function applyState(s) {
     document.getElementById('absRT60').checked = true;
     setAbsorptionMode('rt60');
   }
+  if (Array.isArray(s.customMicPositions)) {
+    customMicPositions = s.customMicPositions
+      .filter(validateMicTriple)
+      .map(p => p.map(Number));
+    customSelectedIdx = customMicPositions.length ? 0 : -1;
+  } else {
+    customMicPositions = [];
+    customSelectedIdx = -1;
+  }
   syncImpairmentDetails();
+  updateLiveLabels();
+  renderCustomList();
+  updateCustomArrayVisibility();
 }
 
 document.getElementById('btnPresetSave').addEventListener('click', () => {
@@ -1695,10 +2050,13 @@ function applyUrlHashPreset() {
 [elSelGeo, elMicCount, elRadius, elSep, elSteerAz, elSteerEl, elFreq, elDispRadius, elOpacity].forEach(el => {
   el.addEventListener('input', refresh);
 });
+elSelGeo.addEventListener('change', refresh);
 srpGeoSel.addEventListener('change', refresh);
 srpCondSel.addEventListener('change', refresh);
 
 // ── Init ──
+renderCustomList();
+updateCustomArrayVisibility();
 refresh();
 materialsReady.then(applyUrlHashPreset);
 

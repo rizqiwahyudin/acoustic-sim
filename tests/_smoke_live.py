@@ -17,6 +17,8 @@ Checks:
   (l) Phase 3+ DOA-band + harmonic-comb: fmin/fmax override and
       harmonic_comb=True are echoed back by the server and produce a
       substantially smaller freq_bins set without wrecking DOA accuracy.
+  (m) Phase 3++ CUSTOM geometry: centre-relative mic coordinates run over
+      HTTP and return the expected mic count plus clipping diagnostics.
 
 Run manually (server must be on 127.0.0.1:8766):
   python tests/_smoke_live.py
@@ -340,6 +342,40 @@ def main() -> int:
         ok = False
     if az_err > 10 or el_err > 20:
         print(f"    FAIL: DOA drifted too far under comb: "
+              f"az_err={az_err:.1f} el_err={el_err:.1f}")
+        ok = False
+
+    print("[m] Phase 3++ CUSTOM geometry over HTTP ...")
+    custom_positions = []
+    per_ring = 6
+    radius = 0.15
+    half_sep = 0.06
+    for i in range(per_ring):
+        a = 2 * np.pi * i / per_ring
+        custom_positions.append([radius * np.cos(a), radius * np.sin(a), -half_sep])
+    for i in range(per_ring):
+        a = 2 * np.pi * i / per_ring + np.pi / per_ring
+        custom_positions.append([radius * np.cos(a), radius * np.sin(a), half_sep])
+
+    body_custom = base_payload()
+    body_custom["geometry"] = "CUSTOM"
+    body_custom["custom_mic_positions"] = custom_positions
+    r_custom = post("/simulate", body_custom)
+    az_err = abs((r_custom["est_az_deg"] - 60) % 360)
+    az_err = min(az_err, 360 - az_err)
+    el_err = abs(r_custom["est_el_deg"] - 30)
+    print(f"    custom mics={len(r_custom.get('mic_positions') or [])} "
+          f"clips={len(r_custom.get('mic_clip_notes') or [])} "
+          f"est az={r_custom['est_az_deg']} el={r_custom['est_el_deg']}")
+    if len(r_custom.get("mic_positions") or []) != 12:
+        print("    FAIL: CUSTOM response should return 12 mic positions")
+        ok = False
+    if r_custom.get("mic_clip_notes"):
+        print(f"    FAIL: in-room custom cylinder should not clip: "
+              f"{r_custom.get('mic_clip_notes')}")
+        ok = False
+    if az_err > 5 or el_err > 10:
+        print(f"    FAIL: CUSTOM cylinder DOA drifted too far: "
               f"az_err={az_err:.1f} el_err={el_err:.1f}")
         ok = False
 

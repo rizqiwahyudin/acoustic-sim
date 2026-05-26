@@ -370,6 +370,63 @@ def build_materials(floor, ceiling, east, west, south, north):
     }
 
 
+def make_custom(center, positions, room_dim=None, margin=0.3):
+    """Build a (3, N) mic-position array from explicit [x, y, z] offsets.
+
+    ``positions`` is a sequence of [dx, dy, dz] triples in metres,
+    interpreted as offsets from ``center``. When ``room_dim`` is given,
+    each mic is clipped to stay at least ``margin`` metres from the walls.
+
+    Returns
+    -------
+    array_R : ndarray, shape (3, N)
+    clip_notes : list of dict
+        One entry per clipped axis: {idx, axis, before, after}.
+    """
+    center = np.asarray(center, dtype=float)
+    if center.shape != (3,):
+        raise ValueError("center must be a length-3 coordinate")
+
+    offsets = np.asarray(positions, dtype=float)
+    if offsets.size == 0:
+        raise ValueError("CUSTOM requires at least one mic position")
+    if offsets.ndim != 2 or offsets.shape[1] != 3:
+        raise ValueError("custom mic positions must be [x, y, z] triples")
+    if not np.all(np.isfinite(offsets)):
+        raise ValueError("custom mic positions must be finite numbers")
+
+    absolute = offsets + center[None, :]
+
+    for i in range(absolute.shape[0]):
+        deltas = absolute[i + 1:] - absolute[i]
+        if deltas.size and np.any(np.linalg.norm(deltas, axis=1) < 1e-6):
+            raise ValueError("custom mic positions must be unique")
+
+    clip_notes = []
+    if room_dim is not None:
+        room_dim = np.asarray(room_dim, dtype=float)
+        if room_dim.shape != (3,):
+            raise ValueError("room_dim must be a length-3 coordinate")
+        lo = np.full(3, float(margin))
+        hi = room_dim - float(margin)
+        if np.any(hi < lo):
+            raise ValueError("room dimensions are too small for the requested margin")
+
+        clipped = np.clip(absolute, lo[None, :], hi[None, :])
+        axes = ("x", "y", "z")
+        changed = np.abs(clipped - absolute) > 1e-9
+        for i, axis_idx in zip(*np.where(changed)):
+            clip_notes.append({
+                "idx": int(i),
+                "axis": axes[int(axis_idx)],
+                "before": float(absolute[i, axis_idx]),
+                "after": float(clipped[i, axis_idx]),
+            })
+        absolute = clipped
+
+    return absolute.T, clip_notes
+
+
 def measure_rt60_from_rir(rir, fs, decay_db=20):
     """Return the measured RT60 of an RIR via ``pra.experimental.measure_rt60``.
 
