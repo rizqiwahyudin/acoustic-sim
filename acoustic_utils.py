@@ -39,6 +39,19 @@ DEFAULT_FMAX = 2000.0               # upper edge of SRP-PHAT band (Hz)
 DEFAULT_HARMONIC_TOL_HZ = 10.0      # +/- tolerance around each n*f0 harmonic
 DEFAULT_HARMONIC_MAX_ORDER = 20     # stop the comb after this many harmonics
 
+# ADAU1467 budget used for coarse MIPS estimates in the UI.
+ADAU1467_OPS_PER_SAMPLE_BUDGET = 6144
+
+# MICCANVAS test geometry: center mic + inner 6-mic ring (20 mm diameter)
+# + outer 8-mic ring (40 mm diameter, staggered by 22.5 deg).
+_MICCANVAS_INNER_ANGLES = np.linspace(0.0, 2 * np.pi, 6, endpoint=False)
+_MICCANVAS_OUTER_ANGLES = np.linspace(0.0, 2 * np.pi, 8, endpoint=False) + (np.pi / 8.0)
+MICCANVAS_POSITIONS = (
+    [[0.0, 0.0, 0.0]]
+    + [[float(0.010 * np.cos(a)), float(0.010 * np.sin(a)), 0.0] for a in _MICCANVAS_INNER_ANGLES]
+    + [[float(0.020 * np.cos(a)), float(0.020 * np.sin(a)), 0.0] for a in _MICCANVAS_OUTER_ANGLES]
+)
+
 
 def spl_to_amplitude(spl_db):
     """Convert dB SPL at 1 m to RMS pressure in Pascals.
@@ -425,6 +438,204 @@ def make_custom(center, positions, room_dim=None, margin=0.3):
         absolute = clipped
 
     return absolute.T, clip_notes
+
+
+def _coerce_mic_positions_xyz(mic_positions):
+    """Return mic positions as shape (n_mics, 3)."""
+    arr = np.asarray(mic_positions, dtype=np.float64)
+    if arr.ndim != 2:
+        raise ValueError("mic_positions must be a 2D array")
+    if arr.shape[1] == 3:
+        return arr
+    if arr.shape[0] == 3:
+        return arr.T
+    raise ValueError("mic_positions must be shape (n_mics, 3) or (3, n_mics)")
+
+
+def _fractional_delay_filter(delay_samples, n_taps=16):
+    """Windowed-sinc FIR approximating a positive fractional delay."""
+    center = (n_taps - 1) / 2.0
+    n = np.arange(n_taps, dtype=np.float64)
+    h = np.sinc(n - center - float(delay_samples))
+    h *= np.blackman(n_taps)
+    s = float(np.sum(h))
+    if abs(s) > 1e-12:
+        h /= s
+    return h
+
+
+def das_delays_2d(mic_positions, theta_rad, fs, c=343.0,
+                  frac_delay_max_samples=8):
+    """Compute centroid-relative 2D steering delays in samples.
+
+    This matches the user's hardware-side Python workflow:
+      mics_centered = mics - centroid
+      u = [cos(theta), sin(theta)]
+      delays = (mics_centered @ u) / c * fs
+      delays -= delays.min()
+    """
+    mics = _coerce_mic_positions_xyz(mic_positions)
+    centroid = np.mean(mics, axis=0)
+    mics_centered = mics - centroid
+    u = np.array([np.cos(theta_rad), np.sin(theta_rad)], dtype=np.float64)
+    delays = (mics_centered[:, :2] @ u) / float(c) * float(fs)
+    delays -= np.min(delays)
+
+    max_delay = float(frac_delay_max_samples)
+    delays_clipped = np.clip(delays, 0.0, max_delay)
+    clamp_notes = []
+    changed = np.abs(delays_clipped - delays) > 1e-9
+    for idx in np.where(changed)[0]:
+        clamp_notes.append({
+            "idx": int(idx),
+            "before_samples": float(delays[idx]),
+            "after_samples": float(delays_clipped[idx]),
+            "max_samples": max_delay,
+        })
+    return delays_clipped, clamp_notes
+
+
+def das_beam(signals, mic_positions, theta_rad, fs, c=343.0,
+             frac_delay_max_samples=8, n_taps=16):
+    """Apply per-mic fractional delay and sum to one DAS beam."""
+    sig = np.asarray(signals, dtype=np.float64)
+    if sig.ndim != 2:
+        raise ValueError("signals must be shape (n_mics, n_samples)")
+    delays, clamp_notes = das_delays_2d(
+        mic_positions, theta_rad, fs, c=c,
+        frac_delay_max_samples=frac_delay_max_samples,
+    )
+    n_mics, n_samples = sig.shape
+    if delays.shape[0] != n_mics:
+        raise ValueError("signals and mic_positions mic counts do not match")
+
+    center_tap = (int(n_taps) - 1) // 2
+    shifted = np.zeros((n_mics, n_samples), dtype=np.float64)
+    for m in range(n_mics):
+        h = _fractional_delay_filter(delays[m], n_taps=int(n_taps))
+        y = fftconvolve(sig[m], h, mode="full")
+        y = y[center_tap:center_tap + n_samples]
+        if y.shape[0] < n_samples:
+            y = np.pad(y, (0, n_samples - y.shape[0]))
+        shifted[m] = y[:n_samples]
+    return np.mean(shifted, axis=0), clamp_notes
+
+
+def scan_directions(signals, mic_positions, angles_rad, fs,
+                    c=343.0, frac_delay_max_samples=8, n_taps=16):
+    """Run DAS over many azimuth angles and return beam powers."""
+    beams = []
+    powers_db = []
+    clamp_notes_per_angle = []
+    for a in angles_rad:
+        beam, clamp_notes = das_beam(
+            signals, mic_positions, float(a), fs, c=c,
+            frac_delay_max_samples=frac_delay_max_samples,
+            n_taps=n_taps,
+        )
+        beams.append(beam)
+        rms = float(np.sqrt(np.mean(np.square(beam))) + 1e-15)
+        powers_db.append(float(20.0 * np.log10(rms / P_REF)))
+        clamp_notes_per_angle.append(clamp_notes)
+    return np.asarray(beams), np.asarray(powers_db), clamp_notes_per_angle
+
+
+def mips_estimate(method, n_mics, k_beams, n_taps, target_fs_hz):
+    """Return rough ADAU1467 budget consumption for DAS modes."""
+    n_mics = int(max(n_mics, 1))
+    k_beams = int(max(k_beams, 1))
+    n_taps = int(max(n_taps, 1))
+    target_fs_hz = float(max(target_fs_hz, 1))
+
+    ops_per_beam = n_mics * n_taps
+    if method == "beam_bank_das":
+        ops_per_sample = ops_per_beam * k_beams
+        latency_s = 0.0
+    elif method == "steered_das":
+        ops_per_sample = ops_per_beam
+        latency_s = None
+    else:
+        ops_per_sample = 0
+        latency_s = None
+
+    ops_per_second = int(round(ops_per_sample * target_fs_hz))
+    budget_used = (float(ops_per_sample) / ADAU1467_OPS_PER_SAMPLE_BUDGET) * 100.0
+    return {
+        "method": str(method),
+        "ops_per_sample": int(ops_per_sample),
+        "ops_per_second": ops_per_second,
+        "budget_used_pct": float(budget_used),
+        "scan_latency_s": latency_s,
+    }
+
+
+def direct_path_mic_signals(
+    drone_sig,
+    mic_positions,
+    drone_pos,
+    fs,
+    c=343.0,
+    drone_spl_db=78.0,
+    frac_taps=16,
+):
+    """Synthesise per-mic signals for a drone via geometric direct path only.
+
+    Each channel gets a windowed-sinc fractional delay proportional to
+  path length and amplitude ``spl_to_amplitude(drone_spl_db) / distance``.
+    """
+    mics = _coerce_mic_positions_xyz(mic_positions)
+    drone_pos = np.asarray(drone_pos, dtype=np.float64).reshape(3)
+    sig = np.asarray(drone_sig, dtype=np.float64).ravel()
+    n_samples = sig.shape[0]
+    n_mics = mics.shape[0]
+
+    dists = np.linalg.norm(mics - drone_pos[None, :], axis=1)
+    dists = np.maximum(dists, 0.05)
+    delays_samples = (dists / float(c)) * float(fs)
+    delays_samples -= float(np.min(delays_samples))
+
+    ref_amp = spl_to_amplitude(float(drone_spl_db))
+    center_tap = (int(frac_taps) - 1) // 2
+    out = np.zeros((n_mics, n_samples), dtype=np.float64)
+
+    for m in range(n_mics):
+        amp = ref_amp / dists[m]
+        h = _fractional_delay_filter(delays_samples[m], n_taps=int(frac_taps))
+        y = fftconvolve(sig * amp, h, mode="full")
+        y = y[center_tap:center_tap + n_samples]
+        if y.shape[0] < n_samples:
+            y = np.pad(y, (0, n_samples - y.shape[0]))
+        out[m] = y[:n_samples]
+    return out
+
+
+def realtime_render_frame(
+    drone_sig_window,
+    crowd_window,
+    mic_positions,
+    drone_pos,
+    fs,
+    c=343.0,
+    drone_spl_db=78.0,
+    frac_taps=16,
+):
+    """Sum direct-path drone and a pre-rendered crowd slice per mic."""
+    drone = direct_path_mic_signals(
+        drone_sig_window,
+        mic_positions,
+        drone_pos,
+        fs,
+        c=c,
+        drone_spl_db=drone_spl_db,
+        frac_taps=frac_taps,
+    )
+    crowd = np.asarray(crowd_window, dtype=np.float64)
+    if crowd.ndim != 2:
+        raise ValueError("crowd_window must be shape (n_mics, n_samples)")
+    n = min(drone.shape[1], crowd.shape[1])
+    if crowd.shape[0] != drone.shape[0]:
+        raise ValueError("crowd_window mic count must match mic_positions")
+    return drone[:, :n] + crowd[:, :n]
 
 
 def measure_rt60_from_rir(rir, fs, decay_db=20):

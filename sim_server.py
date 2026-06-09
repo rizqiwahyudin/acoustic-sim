@@ -8,15 +8,17 @@ Usage:
     python sim_server.py              # starts on port 8766
 """
 
+import asyncio
 import base64
 import io
+import json
 import pathlib
 import time
 
 import numpy as np
 import pyroomacoustics as pra
 import scipy.io.wavfile as wavfile
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -34,6 +36,9 @@ from acoustic_utils import (
     compute_top_n_peaks,
     crowd_positions_mixed,
     feature_snr_db,
+    MICCANVAS_POSITIONS,
+    das_beam,
+    mips_estimate,
     load_crosstalk_fir,
     log_mel_features,
     make_custom,
@@ -42,6 +47,8 @@ from acoustic_utils import (
     ml_path_quantize_audio,
     ml_path_quantize_features,
     ml_path_snr_db,
+    scan_directions,
+    realtime_render_frame,
     render_spectrogram_png_b64,
     spl_to_amplitude,
     synthesize_diffuse_crowd_plane_waves,
@@ -183,6 +190,11 @@ def build_array(geometry, center, mic_count, radius, ring_separation,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif geometry == "MICCANVAS":
+        try:
+            return make_custom(center, MICCANVAS_POSITIONS, room_dim=room_dim, margin=MARGIN)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise ValueError(f"Unknown geometry: {geometry}")
 
 
@@ -320,6 +332,11 @@ app.add_middleware(
 class SimRequest(BaseModel):
     geometry: str = "UCA"
     custom_mic_positions: list[list[float]] | None = None
+    beam_method: str = "srp_phat"  # "srp_phat" | "steered_das" | "beam_bank_das"
+    beam_bank_angles_deg: list[float] | None = None
+    frac_delay_max_samples: int = 8
+    frac_delay_taps: int = 16
+    target_fs_hz: int = 48_000
     mic_count: int = 12
     radius: float = 0.15
     ring_separation: float = 0.12
@@ -564,11 +581,6 @@ def run_live_trial(req: SimRequest) -> dict:
     if req.quantization:
         signals = apply_codec_quantization(signals, bit_depth=req.bit_depth)
 
-    X = np.array([
-        pra.transform.stft.analysis(sig, NFFT, HOP).T
-        for sig in signals
-    ])
-
     freq_bins = build_freq_bin_mask(
         FS, NFFT,
         fmin_hz=req.fmin_hz,
@@ -576,29 +588,100 @@ def run_live_trial(req: SimRequest) -> dict:
         harmonic_comb=req.harmonic_comb,
         f0_hz=req.drone_fundamental_hz,
     )
+    beam_method = str(req.beam_method).lower().strip()
+    valid_beam_methods = {"srp_phat", "steered_das", "beam_bank_das"}
+    if beam_method not in valid_beam_methods:
+        raise HTTPException(
+            status_code=400,
+            detail=f"beam_method must be one of {sorted(valid_beam_methods)}",
+        )
 
-    doa = pra.doa.SRP(
-        array_R, FS, NFFT, c=C, num_src=1, dim=3,
-        azimuth=SRP_AZ, colatitude=SRP_COLAT,
+    beam_scan = None
+    mips = mips_estimate(
+        beam_method,
+        n_mics=int(array_R.shape[1]),
+        k_beams=1,
+        n_taps=int(req.frac_delay_taps),
+        target_fs_hz=int(req.target_fs_hz),
     )
-    doa.locate_sources(X, freq_bins=freq_bins)
 
-    est_az_rad = float(np.atleast_1d(doa.azimuth_recon)[0])
-    est_colat_rad = float(np.atleast_1d(doa.colatitude_recon)[0])
-    est_az_deg = float(np.rad2deg(est_az_rad))
-    est_el_deg = float(90.0 - np.rad2deg(est_colat_rad))
+    if beam_method == "srp_phat":
+        X = np.array([
+            pra.transform.stft.analysis(sig, NFFT, HOP).T
+            for sig in signals
+        ])
 
-    grid_vals = np.array(doa.grid.values, copy=True)
-    power_2d = grid_vals.reshape(len(SRP_COLAT), len(SRP_AZ)).tolist()
-    top_peaks = compute_top_n_peaks(
-        grid_vals, SRP_AZ, SRP_COLAT, n=3, min_angular_sep_deg=15.0,
-    )
+        doa = pra.doa.SRP(
+            array_R, FS, NFFT, c=C, num_src=1, dim=3,
+            azimuth=SRP_AZ, colatitude=SRP_COLAT,
+        )
+        doa.locate_sources(X, freq_bins=freq_bins)
+
+        est_az_rad = float(np.atleast_1d(doa.azimuth_recon)[0])
+        est_colat_rad = float(np.atleast_1d(doa.colatitude_recon)[0])
+        est_az_deg = float(np.rad2deg(est_az_rad))
+        est_el_deg = float(90.0 - np.rad2deg(est_colat_rad))
+
+        grid_vals = np.array(doa.grid.values, copy=True)
+        power_2d = grid_vals.reshape(len(SRP_COLAT), len(SRP_AZ)).tolist()
+        top_peaks = compute_top_n_peaks(
+            grid_vals, SRP_AZ, SRP_COLAT, n=3, min_angular_sep_deg=15.0,
+        )
+        bf_audio = delay_and_sum(
+            signals, array_R, est_az_rad, np.deg2rad(est_el_deg), FS,
+        )
+    else:
+        if req.beam_bank_angles_deg and len(req.beam_bank_angles_deg) > 0:
+            angles_deg = [float(a) % 360.0 for a in req.beam_bank_angles_deg]
+        else:
+            angles_deg = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
+        angles_rad = np.deg2rad(np.asarray(angles_deg, dtype=np.float64))
+
+        beams, powers_db, clamp_notes_per_angle = scan_directions(
+            signals, array_R, angles_rad, FS,
+            c=C,
+            frac_delay_max_samples=int(req.frac_delay_max_samples),
+            n_taps=int(req.frac_delay_taps),
+        )
+        argmax_idx = int(np.argmax(powers_db))
+        est_az_deg = float(angles_deg[argmax_idx])
+        est_el_deg = 0.0
+        bf_audio = beams[argmax_idx]
+        power_2d = []
+        top_peaks = []
+
+        clamp_notes = []
+        for i, notes in enumerate(clamp_notes_per_angle):
+            for n in notes:
+                clamp_notes.append({
+                    "angle_deg": float(angles_deg[i]),
+                    "idx": int(n["idx"]),
+                    "before_samples": float(n["before_samples"]),
+                    "after_samples": float(n["after_samples"]),
+                    "max_samples": float(n["max_samples"]),
+                })
+        beam_scan = {
+            "angles_deg": [float(a) for a in angles_deg],
+            "powers_db": [float(x) for x in powers_db.tolist()],
+            "argmax_idx": argmax_idx,
+            "clamp_notes": clamp_notes,
+        }
+        k_for_mips = len(angles_deg) if beam_method == "beam_bank_das" else 1
+        mips = mips_estimate(
+            beam_method,
+            n_mics=int(array_R.shape[1]),
+            k_beams=k_for_mips,
+            n_taps=int(req.frac_delay_taps),
+            target_fs_hz=int(req.target_fs_hz),
+        )
+        if beam_method == "steered_das":
+            mips["scan_latency_s"] = (
+                float(len(angles_deg)) * float(req.integration_ms) / 1000.0
+            )
 
     n_out = signals.shape[1]
     raw_audio = signals[0, :n_out].copy()
     unsteered_audio = signals[:, :n_out].mean(axis=0)
-    bf_audio = delay_and_sum(signals, array_R, est_az_rad,
-                             np.deg2rad(est_el_deg), FS)
 
     raw_b64, unsteered_b64, bf_b64 = encode_three_wavs_joint(
         [raw_audio, unsteered_audio, bf_audio], FS,
@@ -683,6 +766,9 @@ def run_live_trial(req: SimRequest) -> dict:
     return {
         "power": power_2d,
         "top_peaks": top_peaks,
+        "beam_method": beam_method,
+        "beam_scan": beam_scan,
+        "mips": mips,
         "est_az_deg": round(est_az_deg, 1),
         "est_el_deg": round(est_el_deg, 1),
         "true_az_deg": req.source_az_deg,
@@ -728,6 +814,418 @@ def list_materials():
     without hard-coding names that might drift from the backend."""
     return {"choices": list(MATERIAL_CHOICES),
             "exhibition_hall": dict(EXHIBITION_HALL_MATERIALS)}
+
+
+# ── Realtime WebSocket session ────────────────────────────────────────────────
+
+REALTIME_CROWD_DURATION_S = 30.0
+
+
+class RealtimeSession:
+  """Mutable state for the continuous Realtime driver loop."""
+
+  def __init__(self):
+    self.room_dim = np.array([50.0, 40.0, 12.0])
+    self.array_center = self.room_dim / 2
+    self.array_center[2] = 1.0
+    self.geometry = "UCA"
+    self.custom_mic_positions = None
+    self.mic_count = 12
+    self.radius = 0.15
+    self.ring_separation = 0.12
+    self.array_R = make_uca(self.array_center, self.mic_count, self.radius)
+    self.crowd_mix = np.zeros((self.mic_count, 1), dtype=np.float64)
+    self.crowd_cursor = 0
+    self.crowd_positions = []
+    self.pa_positions = []
+    self.diffuse = True
+    self.crowd_count = 30
+    self.pa_count = 8
+    self.crowd_spl_db = CROWD_SPL_DB
+    self.pa_spl_db = PA_SPL_DB
+    self.drone_spl_db = DRONE_SPL_DB
+    self.temperature_c = 20.0
+    self.humidity_pct = 50.0
+    self.source_az_deg = 60.0
+    self.source_el_deg = 0.0
+    self.source_distance = 6.0
+    self.drone_pos = drone_position(
+      self.array_center, self.source_az_deg, self.source_el_deg,
+      self.source_distance, self.room_dim,
+    )
+    self.beam_method = "beam_bank_das"
+    self.beam_bank_angles_deg = [0, 45, 90, 135, 180, 225, 270, 315]
+    self.frac_delay_max_samples = 8
+    self.frac_delay_taps = 16
+    self.target_fs_hz = 48_000
+    self.integration_ms = 100
+    self.paused = False
+    self.regenerating = False
+    self.frame_idx = 0
+    self.rng = np.random.default_rng(7)
+    self.rt60 = 1.5
+
+
+def _realtime_rebuild_array(session: RealtimeSession):
+  session.array_R, _ = build_array(
+    session.geometry,
+    session.array_center,
+    session.mic_count,
+    session.radius,
+    session.ring_separation,
+    room_dim=session.room_dim,
+    custom_mic_positions=session.custom_mic_positions,
+  )
+
+
+def precompute_crowd_buffer(session: RealtimeSession, duration_s=REALTIME_CROWD_DURATION_S):
+  """Render crowd+PA only into a looping mic buffer (no drone)."""
+  n_samples = int(duration_s * FS)
+  sigma2 = spl_to_amplitude(MIC_NOISE_FLOOR_DB) ** 2
+  try:
+    e_absorption, max_order = pra.inverse_sabine(session.rt60, session.room_dim.tolist())
+  except ValueError:
+    e_absorption = 0.5
+    max_order = 3
+  max_order = min(max_order, 6)
+  room = pra.ShoeBox(
+    session.room_dim.tolist(),
+    fs=FS,
+    sigma2_awgn=sigma2,
+    materials=pra.Material(e_absorption),
+    max_order=max_order,
+    **air_absorption_kwargs(session.temperature_c, session.humidity_pct),
+  )
+
+  session.crowd_positions = []
+  session.pa_positions = []
+  if session.diffuse:
+    session.crowd_positions = crowd_positions_mixed(
+      session.room_dim,
+      session.crowd_count,
+      z_height=1.5,
+      array_center=session.array_center,
+      rng=session.rng,
+    )
+    session.pa_positions = wall_adjacent_positions(
+      session.room_dim,
+      session.pa_count,
+      z_height=3.0,
+      rng=session.rng,
+    )
+    crowd_scale = spl_to_amplitude(session.crowd_spl_db)
+    pa_scale = spl_to_amplitude(session.pa_spl_db)
+    crowd_segs = get_crowd_segments(len(session.crowd_positions), n_samples, session.rng)
+    pa_segs = get_crowd_segments(len(session.pa_positions), n_samples, session.rng)
+    for pos, seg in zip(session.crowd_positions, crowd_segs):
+      room.add_source(pos, signal=seg * crowd_scale)
+    for pos, seg in zip(session.pa_positions, pa_segs):
+      room.add_source(pos, signal=seg * pa_scale)
+
+  n_mics = session.array_R.shape[1]
+  if not session.diffuse or n_samples < 1:
+    session.crowd_mix = np.zeros((n_mics, max(n_samples, 1)), dtype=np.float64)
+    session.crowd_cursor = 0
+    return
+
+  room.add_microphone_array(pra.MicrophoneArray(session.array_R, fs=FS))
+  room.simulate()
+  session.crowd_mix = np.asarray(room.mic_array.signals, dtype=np.float64)
+  session.crowd_cursor = 0
+
+
+def _crowd_slice(session: RealtimeSession, n_samples: int) -> np.ndarray:
+  buf = session.crowd_mix
+  n_mics, total = buf.shape
+  if total < n_samples:
+    out = np.zeros((n_mics, n_samples), dtype=np.float64)
+    out[:, :total] = buf
+    return out
+  start = session.crowd_cursor % total
+  end = start + n_samples
+  if end <= total:
+    chunk = buf[:, start:end].copy()
+  else:
+    chunk = np.hstack([buf[:, start:], buf[:, : end - total]]).copy()
+  session.crowd_cursor = (start + n_samples) % total
+  return chunk
+
+
+def _realtime_angles_deg(session: RealtimeSession):
+  if session.beam_bank_angles_deg and len(session.beam_bank_angles_deg) > 0:
+    return [float(a) % 360.0 for a in session.beam_bank_angles_deg]
+  return [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
+
+
+def build_realtime_frame(session: RealtimeSession) -> dict:
+  integration_ms = int(max(50, min(500, session.integration_ms)))
+  n_samples = max(int(FS * integration_ms / 1000), 64)
+  drone_sig = get_drone_signal(n_samples, session.rng)
+  crowd_window = _crowd_slice(session, n_samples)
+  signals = realtime_render_frame(
+    drone_sig,
+    crowd_window,
+    session.array_R,
+    session.drone_pos,
+    FS,
+    c=C,
+    drone_spl_db=session.drone_spl_db,
+    frac_taps=session.frac_delay_taps,
+  )
+  angles_deg = _realtime_angles_deg(session)
+  angles_rad = np.deg2rad(np.asarray(angles_deg, dtype=np.float64))
+  beams, powers_db, clamp_notes_per_angle = scan_directions(
+    signals,
+    session.array_R,
+    angles_rad,
+    FS,
+    c=C,
+    frac_delay_max_samples=session.frac_delay_max_samples,
+    n_taps=session.frac_delay_taps,
+  )
+  argmax_idx = int(np.argmax(powers_db))
+  est_az_deg = float(angles_deg[argmax_idx])
+  clamp_notes = []
+  for i, notes in enumerate(clamp_notes_per_angle):
+    for n in notes:
+      clamp_notes.append({
+        "angle_deg": float(angles_deg[i]),
+        "idx": int(n["idx"]),
+        "before_samples": float(n["before_samples"]),
+        "after_samples": float(n["after_samples"]),
+        "max_samples": float(n["max_samples"]),
+      })
+  k_beams = len(angles_deg) if session.beam_method == "beam_bank_das" else 1
+  mips = mips_estimate(
+    session.beam_method,
+    n_mics=int(session.array_R.shape[1]),
+    k_beams=k_beams,
+    n_taps=int(session.frac_delay_taps),
+    target_fs_hz=int(session.target_fs_hz),
+  )
+  if session.beam_method == "steered_das":
+    mips["scan_latency_s"] = float(len(angles_deg)) * integration_ms / 1000.0
+
+  sorted_powers = np.sort(powers_db)
+  margin_db = float(sorted_powers[-1] - sorted_powers[-2]) if len(sorted_powers) > 1 else 0.0
+
+  session.frame_idx += 1
+  t_sim_s = session.frame_idx * integration_ms / 1000.0
+  mic_rel = (session.array_R - session.array_center[:, None]).T.tolist()
+
+  return {
+    "type": "frame",
+    "frame_idx": session.frame_idx,
+    "t_sim_s": round(t_sim_s, 3),
+    "beam_method": session.beam_method,
+    "beam_scan": {
+      "angles_deg": angles_deg,
+      "powers_db": [float(x) for x in powers_db.tolist()],
+      "argmax_idx": argmax_idx,
+      "clamp_notes": clamp_notes,
+    },
+    "mips": mips,
+    "est_az_deg": round(est_az_deg, 1),
+    "est_el_deg": 0.0,
+    "true_az_deg": round(float(session.source_az_deg), 1),
+    "true_el_deg": round(float(session.source_el_deg), 1),
+    "margin_db": round(margin_db, 2),
+    "argmax_db": round(float(powers_db[argmax_idx]), 2),
+    "source_pos": session.drone_pos.tolist(),
+    "mic_positions": mic_rel,
+    "geometry": session.geometry,
+    "n_mics": int(session.array_R.shape[1]),
+    "integration_ms": integration_ms,
+  }
+
+
+def _realtime_init_payload(session: RealtimeSession) -> dict:
+  mic_rel = (session.array_R - session.array_center[:, None]).T.tolist()
+  angles_deg = _realtime_angles_deg(session)
+  k_beams = len(angles_deg) if session.beam_method == "beam_bank_das" else 1
+  mips = mips_estimate(
+    session.beam_method,
+    n_mics=int(session.array_R.shape[1]),
+    k_beams=k_beams,
+    n_taps=int(session.frac_delay_taps),
+    target_fs_hz=int(session.target_fs_hz),
+  )
+  return {
+    "type": "init",
+    "room_dim": session.room_dim.tolist(),
+    "array_center": session.array_center.tolist(),
+    "mic_positions": mic_rel,
+    "crowd_positions": session.crowd_positions,
+    "pa_positions": session.pa_positions,
+    "geometry": session.geometry,
+    "n_mics": int(session.array_R.shape[1]),
+    "mips": mips,
+    "beam_method": session.beam_method,
+    "beam_bank_angles_deg": angles_deg,
+    "source_pos": session.drone_pos.tolist(),
+    "true_az_deg": session.source_az_deg,
+    "true_el_deg": session.source_el_deg,
+  }
+
+
+def _apply_realtime_control(session: RealtimeSession, msg: dict):
+  mtype = msg.get("type")
+  if mtype == "pause":
+    session.paused = True
+    return
+  if mtype == "resume":
+    session.paused = False
+    return
+  if mtype == "set_drone":
+    if "pos" in msg and len(msg["pos"]) >= 2:
+      x, y = float(msg["pos"][0]), float(msg["pos"][1])
+      dx = x - session.array_center[0]
+      dy = y - session.array_center[1]
+      session.source_distance = float(max(np.hypot(dx, dy), 0.5))
+      session.source_az_deg = float(np.rad2deg(np.arctan2(dy, dx)) % 360.0)
+    if "el_deg" in msg:
+      session.source_el_deg = float(msg["el_deg"])
+    if "distance" in msg:
+      session.source_distance = float(msg["distance"])
+    session.drone_pos = drone_position(
+      session.array_center,
+      session.source_az_deg,
+      session.source_el_deg,
+      session.source_distance,
+      session.room_dim,
+    )
+    return
+  if mtype == "set_method":
+    session.beam_method = str(msg.get("beam_method", "beam_bank_das"))
+    return
+  if mtype == "set_beam_bank":
+    k = int(msg.get("k", 8))
+    session.beam_bank_angles_deg = [float(i * (360.0 / k)) % 360.0 for i in range(max(k, 4))]
+    return
+  if mtype == "set_integration_ms":
+    session.integration_ms = int(msg.get("integration_ms", 100))
+    return
+  if mtype == "set_frac":
+    if "max_samples" in msg:
+      session.frac_delay_max_samples = int(msg["max_samples"])
+    if "taps" in msg:
+      session.frac_delay_taps = int(msg["taps"])
+    return
+  # NOTE: set_geometry and set_crowd are handled at the WS endpoint so the
+  # heavy ShoeBox render can be dispatched to a worker thread without
+  # blocking the WebSocket keepalive. They are intentionally not reached
+  # here.
+
+
+async def realtime_loop(ws: WebSocket, session: RealtimeSession):
+  try:
+    while True:
+      if session.paused:
+        await asyncio.sleep(0.05)
+        continue
+      try:
+        frame = build_realtime_frame(session)
+      except Exception as exc:
+        await asyncio.sleep(0.1)
+        continue
+      try:
+        await ws.send_json(frame)
+      except (WebSocketDisconnect, RuntimeError):
+        return
+      tick_s = max(0.05, min(0.5, session.integration_ms / 1000.0))
+      await asyncio.sleep(tick_s)
+  except (WebSocketDisconnect, asyncio.CancelledError):
+    return
+
+
+_realtime_session = RealtimeSession()
+
+
+async def _regenerate_crowd_async(session: RealtimeSession, ws: WebSocket = None):
+  """Run the heavy ShoeBox crowd render off the event loop.
+
+  Sends a ``regenerating_ambient`` status frame before and after so the UI
+  can show a spinner without ever blocking the WebSocket. While the worker
+  thread runs the realtime loop keeps emitting frames using a zero crowd
+  buffer, which is what keeps the connection alive past the browser's
+  ping/pong timeout.
+  """
+  session.regenerating = True
+  if ws is not None:
+    try:
+      await ws.send_json({"type": "regenerating_ambient", "state": "start"})
+    except Exception:
+      pass
+  try:
+    await asyncio.to_thread(precompute_crowd_buffer, session)
+  finally:
+    session.regenerating = False
+  if ws is not None:
+    try:
+      await ws.send_json({"type": "regenerating_ambient", "state": "done"})
+    except Exception:
+      pass
+
+
+@app.websocket("/realtime")
+async def realtime_ws(ws: WebSocket):
+  await ws.accept()
+  session = _realtime_session
+  _realtime_rebuild_array(session)
+  n_mics = int(session.array_R.shape[1])
+  session.crowd_mix = np.zeros((n_mics, max(int(FS * 0.5), 1)), dtype=np.float64)
+  session.crowd_cursor = 0
+  session.crowd_positions = []
+  session.pa_positions = []
+  session.paused = False
+  await ws.send_json(_realtime_init_payload(session))
+  loop_task = asyncio.create_task(realtime_loop(ws, session))
+  if session.diffuse:
+    asyncio.create_task(_regenerate_crowd_async(session, ws))
+  try:
+    while True:
+      raw = await ws.receive_text()
+      try:
+        msg = json.loads(raw)
+      except json.JSONDecodeError:
+        continue
+      mtype = msg.get("type")
+      if mtype in ("set_geometry", "set_crowd"):
+        if mtype == "set_geometry":
+          session.geometry = str(msg.get("geometry", session.geometry))
+          if msg.get("custom_mic_positions"):
+            session.custom_mic_positions = msg["custom_mic_positions"]
+          session.mic_count = int(msg.get("mic_count", session.mic_count))
+          session.radius = float(msg.get("radius", session.radius))
+          session.ring_separation = float(msg.get("ring_separation", session.ring_separation))
+          _realtime_rebuild_array(session)
+          new_mics = int(session.array_R.shape[1])
+          session.crowd_mix = np.zeros((new_mics, session.crowd_mix.shape[1] or 1), dtype=np.float64)
+          await ws.send_json(_realtime_init_payload(session))
+        else:
+          if "diffuse" in msg:
+            session.diffuse = bool(msg["diffuse"])
+          if "crowd_count" in msg:
+            session.crowd_count = int(msg["crowd_count"])
+        if session.diffuse:
+          asyncio.create_task(_regenerate_crowd_async(session, ws))
+        else:
+          session.crowd_positions = []
+          session.pa_positions = []
+          mics = int(session.array_R.shape[1])
+          session.crowd_mix = np.zeros((mics, session.crowd_mix.shape[1] or 1), dtype=np.float64)
+        continue
+      _apply_realtime_control(session, msg)
+      if mtype == "request_init":
+        await ws.send_json(_realtime_init_payload(session))
+  except WebSocketDisconnect:
+    pass
+  finally:
+    loop_task.cancel()
+    try:
+      await loop_task
+    except asyncio.CancelledError:
+      pass
 
 
 # ── Startup ────────────────────────────────────────────────────────────────────

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- * 
+ * This software is distributed in the hope that it will be useful, 
+ * but is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR 
+ * CONDITIONS OF ANY KIND, without even the implied warranty of 
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 
+ * 
+ * Copyright ©2026 Analog Devices, Inc. All rights reserved.
+ * 
+-->
+<!--NetList XML file-->
+<IC name="ADAU1467_0" partnumber="ADAU1467">
+  <Core name="ADAU146xCore_0">
+    <Schematic name="ADAU146xSchematic_0">
+      <Algorithm name="Safeload" friendlyname="Schematic Params" />
+      <Algorithm name="Output_1" friendlyname="Output">
+        <Link pin="Input" dir="in" link="Link_150" id="Link_150" />
+      </Algorithm>
+      <Algorithm name="Input16to31_0" friendlyname="Input SDATA0">
+        <Link pin="Ch16_out" dir="out" link="Link_43" id="Link_43" />
+        <Link pin="Ch17_out" dir="out" link="Link_44" id="Link_44" />
+        <Link pin="Ch18_out" dir="out" link="Link_45" id="Link_45" />
+        <Link pin="Ch19_out" dir="out" link="Link_46" id="Link_46" />
+        <Link pin="Ch20_out" dir="out" link="Link_47" id="Link_47" />
+        <Link pin="Ch21_out" dir="out" link="Link_48" id="Link_48" />
+        <Link pin="Ch22_out" dir="out" link="Link_49" id="Link_49" />
+        <Link pin="Ch23_out" dir="out" link="Link_50" id="Link_50" />
+        <Link pin="Ch24_out" dir="out" link="Link_51" id="Link_51" />
+        <Link pin="Ch25_out" dir="out" link="Link_52" id="Link_52" />
+        <Link pin="Ch26_out" dir="out" link="Link_53" id="Link_53" />
+        <Link pin="Ch27_out" dir="out" link="Link_54" id="Link_54" />
+        <Link pin="Ch28_out" dir="out" link="Link_55" id="Link_55" />
+        <Link pin="Ch29_out" dir="out" link="Link_56" id="Link_56" />
+        <Link pin="Ch30_out" dir="out" link="Link_57" id="Link_57" />
+      </Algorithm>
+      <Algorithm name="FractionalDelay_0" friendlyname="Delays the Input Signal by an interpolated value">
+        <Link pin="Input0" dir="in" link="Link_43" id="Link_74" />
+        <Link pin="Output0" dir="out" link="Link_134" id="Link_134" />
+      </Algorithm>
+      <Algorithm name="SignalAdd_0" friendlyname="Takes the input signal and adds them together">
+        <Link pin="Input0" dir="in" link="Link_134" id="Link_58" />
+        <Link pin="Input1" dir="in" link="Link_135" id="Link_59" />
+        <Link pin="Input2" dir="in" link="Link_136" id="Link_60" />
+        <Link pin="Input3" dir="in" link="Link_137" id="Link_61" />
+        <Link pin="Input4" dir="in" link="Link_138" id="Link_62" />
+        <Link pin="Input5" dir="in" link="Link_139" id="Link_63" />
+        <Link pin="Input6" dir="in" link="Link_140" id="Link_64" />
+        <Link pin="Input7" dir="in" link="Link_141" id="Link_65" />
+        <Link pin="Input8" dir="in" link="Link_142" id="Link_66" />
+        <Link pin="Input9" dir="in" link="Link_143" id="Link_67" />
+        <Link pin="Input10" dir="in" link="Link_144" id="Link_68" />
+        <Link pin="Input11" dir="in" link="Link_145" id="Link_69" />
+        <Link pin="Input12" dir="in" link="Link_146" id="Link_70" />
+        <Link pin="Input13" dir="in" link="Link_147" id="Link_71" />
+        <Link pin="Input14" dir="in" link="Link_148" id="Link_72" />
+        <Link pin="Output" dir="out" link="Link_149" id="Link_149" />
+      </Algorithm>
+      <Algorithm name="FractionalDelay_0_1" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_2" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_3" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_4" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_5" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_6" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_7" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_8" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_9" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_10" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_11" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_12" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_13" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="FractionalDelay_0_14" friendlyname="Delays the Input Signal by an interpolated value" />
+      <Algorithm name="SignalEnvelope_0" friendlyname="Signal Measurement Envelope Generator">
+        <Link pin="Input" dir="in" link="Link_149" id="Link_149" />
+        <Link pin="Output" dir="out" link="Link_151" id="Link_151" />
+      </Algorithm>
+      <Algorithm name="SingleLevelDetector_0" friendlyname="Displays output Level on a single bar">
+        <Link pin="Output0" dir="out" link="Link_150" id="Link_150" />
+        <Link pin="Input0" dir="in" link="Link_151" id="Link_151" />
+      </Algorithm>
+    </Schematic>
+  </Core>
+</IC>

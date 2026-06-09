@@ -32,6 +32,6 @@ python sim_server.py
 
 python -m http.server 8080
 
-Your simulation should now be running. Navigate to results\array_explorer.html and start playing with the simulation. 
+Your simulation should now be running. Navigate to results\array_explorer.html — tabs are **Beam Pattern**, **SRP Sim**, **Simulator** (one-shot full physics), and **Realtime** (continuous top-down stream over WebSocket). 
 
 If you get any errors relating to processes failing to start because one already exists, that means you do not need to perform the above steps. Unless you made changes to the python files performing backend functions, any frontend HTML changes should be served immediately. 

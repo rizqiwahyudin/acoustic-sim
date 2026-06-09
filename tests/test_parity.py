@@ -25,6 +25,13 @@ if str(REPO_ROOT) not in sys.path:
 import sim_server
 import run_comparison
 from sim_server import SimRequest, run_live_trial
+from acoustic_utils import (
+    MICCANVAS_POSITIONS,
+    das_delays_2d,
+    direct_path_mic_signals,
+    realtime_render_frame,
+    scan_directions,
+)
 
 
 def _wrap_deg(a: float) -> float:
@@ -644,6 +651,158 @@ def test_custom_out_of_room_positions_are_clipped(monkeypatch):
     assert len(result["mic_positions"]) == 3
     assert result["est_az_deg"] is not None
     assert result["est_el_deg"] is not None
+
+
+def test_das_delays_2d_matches_user_python():
+    """The helper must match the exact delay math used on hardware."""
+    fs = 16000
+    theta = np.deg2rad(35.0)
+    mics = np.asarray(MICCANVAS_POSITIONS, dtype=np.float64)
+
+    centroid = np.mean(mics, axis=0)
+    mics_centered = mics - centroid
+    u = np.array([np.cos(theta), np.sin(theta)], dtype=np.float64)
+    expected = (mics_centered[:, :2] @ u) / 343.0 * fs
+    expected -= np.min(expected)
+    expected = np.clip(expected, 0.0, 8.0)
+
+    got, notes = das_delays_2d(mics, theta, fs, c=343.0, frac_delay_max_samples=8)
+    assert np.allclose(got, expected, atol=1e-12)
+    assert notes == []
+
+
+def test_steered_das_argmax_matches_source_within_scan_resolution(monkeypatch):
+    _force_synthetic_audio(monkeypatch)
+    seed = 97
+    req = _make_req(seed, geometry="CUSTOM")
+    req.custom_mic_positions = [p[:] for p in MICCANVAS_POSITIONS]
+    req.beam_method = "steered_das"
+    req.beam_bank_angles_deg = [0, 45, 90, 135, 180, 225, 270, 315]
+    req.source_az_deg = 62.0
+    req.source_el_deg = 0.0
+    req.diffuse = False
+
+    result = run_live_trial(req)
+    az_err = abs(_wrap_deg(result["est_az_deg"] - req.source_az_deg))
+    assert az_err <= 22.5 + 1e-6, (
+        f"steered_das scan lock outside one sector: az_err={az_err:.2f} deg"
+    )
+    assert result["beam_method"] == "steered_das"
+    assert result["beam_scan"] is not None
+    assert len(result["beam_scan"]["angles_deg"]) == 8
+
+
+def test_beam_bank_argmax_matches_source_and_clamp_fires_on_oversized_array(monkeypatch):
+    _force_synthetic_audio(monkeypatch)
+    seed = 101
+
+    req_ok = _make_req(seed, geometry="CUSTOM")
+    req_ok.custom_mic_positions = [p[:] for p in MICCANVAS_POSITIONS]
+    req_ok.beam_method = "beam_bank_das"
+    req_ok.beam_bank_angles_deg = [0, 45, 90, 135, 180, 225, 270, 315]
+    req_ok.source_az_deg = 118.0
+    req_ok.source_el_deg = 0.0
+    req_ok.diffuse = False
+
+    r_ok = run_live_trial(req_ok)
+    az_err = abs(_wrap_deg(r_ok["est_az_deg"] - req_ok.source_az_deg))
+    assert az_err <= 22.5 + 1e-6
+    assert r_ok["beam_scan"] is not None
+    assert r_ok["beam_scan"]["clamp_notes"] == []
+
+    req_clamp = _make_req(seed, geometry="CUSTOM")
+    req_clamp.custom_mic_positions = [
+        [0.0, 0.0, 0.0],
+        [0.655, 0.0, 0.0],
+        [-0.655, 0.0, 0.0],
+        [0.0, 0.655, 0.0],
+    ]
+    req_clamp.beam_method = "beam_bank_das"
+    req_clamp.beam_bank_angles_deg = [0, 90, 180, 270]
+    req_clamp.frac_delay_max_samples = 8
+    req_clamp.source_az_deg = 90.0
+    req_clamp.source_el_deg = 0.0
+    req_clamp.diffuse = False
+
+    r_clamp = run_live_trial(req_clamp)
+    assert r_clamp["beam_scan"] is not None
+    assert len(r_clamp["beam_scan"]["clamp_notes"]) > 0
+
+
+def test_direct_path_delays_match_geometric_propagation():
+    fs = 16_000
+    mics = np.asarray(MICCANVAS_POSITIONS, dtype=np.float64)
+    center = np.array([25.0, 20.0, 1.0])
+    drone_pos = center + np.array([3.0, 0.0, 0.0])
+    impulse = np.zeros(512, dtype=np.float64)
+    impulse[0] = 1.0
+    sig = direct_path_mic_signals(
+        impulse, mics + center, drone_pos, fs, drone_spl_db=94.0,
+    )
+    dists = np.linalg.norm(mics + center - drone_pos, axis=1)
+    for m in range(sig.shape[0]):
+        peak = int(np.argmax(np.abs(sig[m])))
+        expected = int(round((dists[m] - np.min(dists)) / 343.0 * fs))
+        assert abs(peak - expected) <= 2, (
+            f"mic {m}: peak at {peak}, expected ~{expected}"
+        )
+
+
+def test_direct_path_amplitude_follows_inverse_distance():
+    fs = 16_000
+    mics = np.array([[0.0, 0.0, 0.0]], dtype=np.float64)
+    center = np.array([25.0, 20.0, 1.0])
+    n = 4096
+    tone = np.sin(2 * np.pi * 400 * np.arange(n) / fs)
+    pos1 = center + np.array([1.0, 0.0, 0.0])
+    pos2 = center + np.array([2.0, 0.0, 0.0])
+    s1 = direct_path_mic_signals(tone, mics + center, pos1, fs, drone_spl_db=78.0)
+    s2 = direct_path_mic_signals(tone, mics + center, pos2, fs, drone_spl_db=78.0)
+    rms1 = float(np.sqrt(np.mean(s1[0] ** 2)))
+    rms2 = float(np.sqrt(np.mean(s2[0] ** 2)))
+    ratio_db = 20.0 * np.log10(rms1 / max(rms2, 1e-15))
+    assert 5.0 < ratio_db < 7.5, f"expected ~6 dB ratio, got {ratio_db:.2f} dB"
+
+
+def test_realtime_render_frame_matches_scan_argmax_on_known_az():
+    fs = 16_000
+    mics = np.asarray(MICCANVAS_POSITIONS, dtype=np.float64)
+    center = np.array([25.0, 20.0, 1.0])
+    az_true = 42.0
+    dist = 5.0
+    az_rad = np.deg2rad(az_true)
+    drone_pos = center + np.array([
+        dist * np.cos(az_rad),
+        dist * np.sin(az_rad),
+        0.0,
+    ])
+    n = int(0.1 * fs)
+    tone = np.sin(2 * np.pi * 300 * np.arange(n) / fs)
+    crowd = np.zeros((len(mics), n), dtype=np.float64)
+    signals = realtime_render_frame(
+        tone, crowd, mics + center, drone_pos, fs, drone_spl_db=85.0,
+    )
+    angles_deg = [0, 45, 90, 135, 180, 225, 270, 315]
+    angles_rad = np.deg2rad(angles_deg)
+    _, powers_db, _ = scan_directions(
+        signals, mics + center, angles_rad, fs,
+    )
+    est_idx = int(np.argmax(powers_db))
+    est_az = angles_deg[est_idx]
+    err = abs(_wrap_deg(est_az - az_true))
+    assert err <= 22.5 + 1e-6, f"argmax {est_az} vs true {az_true}"
+
+
+def test_crowd_mix_is_reused_across_frames():
+    fs = 16_000
+    n = 256
+    crowd = np.random.default_rng(0).standard_normal((4, 1000))
+    mics = np.zeros((4, 3))
+    drone_pos = np.array([1.0, 0.0, 0.0])
+    tone = np.ones(n)
+    a = realtime_render_frame(tone, crowd[:, 10:10 + n], mics, drone_pos, fs)
+    b = realtime_render_frame(tone, crowd[:, 10:10 + n], mics, drone_pos, fs)
+    assert np.allclose(a, b)
 
 
 if __name__ == "__main__":

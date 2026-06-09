@@ -29,6 +29,21 @@ drone-detection build.
 > custom geometry changes positions, not per-mic directivity,
 > orientation, housing diffraction, or per-channel calibration.
 
+> **What's new in Phase 5 (Realtime mode).** A fourth top-level tab,
+> **Realtime**, streams continuous DAS scan results over WebSocket while
+> you drag the drone on a top-down floor plan. Physics: **direct-path
+> drone** + **pre-rendered crowd/PA ambient** (ISM for static interferers
+> only). **Not modelled:** ISM reflections for the moving drone,
+> atmospheric bias updates per frame, moving-source crossfade, or any
+> classification / CNN output.
+
+> **What's new in Phase 4 (hardware-faithful beamforming modes).** The
+> one-shot **Simulator** tab now includes `beam_method="steered_das"` (single-beam scan-and-lock)
+> and `beam_method="beam_bank_das"` (parallel K-beam bank + argmax
+> selection). Both use centroid-relative planar delay math matching the
+> current ADAU1467 workflow and report FracDelay clamp notes when required
+> sample delays exceed the configured block max.
+
 > **What's new in Phase 3.** The pipeline now includes a fixed-point
 > **MAX78000 ML-path preview** (beamformed audio is re-quantized to
 > int8 or int16, passed through a proxy **log-mel feature extractor**
@@ -354,6 +369,30 @@ byte-compatible.
   uses strictly fewer bins than the flat mode). `tests/_smoke_live.py`
   adds block `[l]` covering the fmin/fmax override and harmonic
   comb end-to-end through the FastAPI server.
+
+## 2e. Newly modelled in Phase 4 (hardware-faithful beamforming)
+
+- **Modelled as 1:1 controls.** Per-mic fractional-delay steering
+  (windowed-sinc approximation, default 16 taps), 2D azimuth-only
+  steering math (`delays -= delays.min()`), FracDelay max-sample
+  clamp detection, single-beam scan-and-lock (Mode 1), and parallel
+  beam-bank argmax selection (Mode 2).
+- **MIPS budget visibility.** The response includes an explicit
+  estimate against ADAU1467's 6144 ops/sample budget using the current
+  mic count, tap count, and number of active beams.
+- **What remains out of model.** Fixed-point quantization inside every
+  DSP MAC stage, SafeLoad write timing / click artefacts, MUX switch
+  artefacts, and the exact proprietary SigmaStudio FracDelay impulse
+  response (the simulator uses a calibrated approximation).
+
+## 2f. Newly modelled in Phase 5 (Realtime mode)
+
+- **Modelled.** WebSocket stream at one frame per integration window;
+  same `scan_directions` / `mips_estimate` as the Simulator tab; bird's-eye
+  K-wedge fan driven by measured `powers_db`; draggable drone; crowd/PA dots
+  from a 30 s pre-rendered ambient buffer; pause/resume.
+- **Not modelled.** Moving-drone ISM; time-varying atmosphere; CNN or any
+  classifier; hardware USB bridge; multi-client fan-out.
 
 ## 3. Expected calibration offsets to reality
 

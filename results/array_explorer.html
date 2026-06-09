@@ -24,7 +24,7 @@ h2{font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;co
 .sep{border:none;border-top:1px solid rgba(255,255,255,0.06);margin:10px 0}
 .ctrl-row{margin-bottom:8px}
 .ctrl-row label{display:block;font-size:10.5px;font-weight:500;color:#888;margin-bottom:3px;font-family:'DM Mono',monospace}
-.ctrl-row select,.ctrl-row input[type=range]{width:100%;background:#1a1a2e;color:#e0e0e0;border:1px solid #333;border-radius:5px;padding:4px 7px;font-family:'DM Mono',monospace;font-size:11px}
+.ctrl-row select,.ctrl-row input[type=range],.ctrl-row input[type=text]{width:100%;background:#1a1a2e;color:#e0e0e0;border:1px solid #333;border-radius:5px;padding:4px 7px;font-family:'DM Mono',monospace;font-size:11px}
 .ctrl-row select:focus{outline:1px solid #7ecfff}
 input[type=range]{-webkit-appearance:none;appearance:none;height:5px;border-radius:3px;background:#2a2a3e;padding:0}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#7ecfff;cursor:pointer}
@@ -128,6 +128,30 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 #audioWrap .download-row .dl-btn{flex:1;padding:3px 2px;background:#1a1a2e;color:#888;border:1px solid #333;border-radius:4px;
   font-family:'DM Mono',monospace;font-size:8.5px;text-align:center;cursor:pointer;text-decoration:none;transition:all 0.15s}
 #audioWrap .download-row .dl-btn:hover{border-color:#7ecfff;color:#7ecfff}
+
+/* Realtime operator view */
+body.realtime-mode{background:#020805}
+body.realtime-mode #controls{background:#05100a;border-color:#1a3d28;color:#d2a14a;border-radius:0}
+body.realtime-mode #controls h2{color:#5fd28a}
+body.realtime-mode .toggle-btn{border-radius:0;border-color:#2a4a36}
+body.realtime-mode .toggle-btn.active{background:#1a3d28;color:#5fd28a;border-color:#5fd28a}
+body.realtime-mode .ctrl-row select,
+body.realtime-mode .ctrl-row input{background:#0a1810;color:#d2a14a;border:1px solid #2a4a36;border-radius:0}
+body.realtime-mode .mat-preset-btn{border-radius:0;border:1px solid #5fd28a;color:#5fd28a;background:#0a1810}
+body.realtime-mode #legend,
+body.realtime-mode #info,
+body.realtime-mode #rirWrap,
+body.realtime-mode #audioWrap,
+body.realtime-mode #btnRun{display:none!important}
+body.realtime-mode #canvas3d{display:none!important}
+#realtimeWrap{position:fixed;inset:0;z-index:1;background:#020805}
+#realtimeWrap.hidden{display:none}
+#birdsEye{display:block;width:100%;height:calc(100% - 90px);cursor:crosshair}
+#rtMetrics{position:fixed;top:14px;right:14px;width:260px;font-family:'DM Mono',monospace;font-size:11px;line-height:1.55;color:#d2a14a;background:rgba(5,16,10,0.92);border:1px solid #2a4a36;padding:10px;z-index:5;border-radius:0}
+#rtTimeline{position:fixed;left:0;right:0;bottom:0;height:90px;background:#05100a;border-top:1px solid #2a4a36;z-index:4}
+#rtTimelineCanvas{display:block;width:100%;height:100%}
+#rtGeoOverlay{position:fixed;right:14px;bottom:100px;font-family:'DM Mono',monospace;font-size:10px;color:#82a89a;background:rgba(5,16,10,0.85);border:1px solid #2a4a36;padding:6px 10px;z-index:5}
+.rt-status{margin-top:8px;font-size:10px;color:#82a89a}
 </style>
 </head>
 <body>
@@ -145,7 +169,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div class="toggle-row" role="tablist">
     <div class="toggle-btn active" id="btnBeam" role="tab" tabindex="0">Beam Pattern</div>
     <div class="toggle-btn" id="btnSRP" role="tab" tabindex="0">SRP Sim</div>
-    <div class="toggle-btn" id="btnLive" role="tab" tabindex="0">Live Sim</div>
+    <div class="toggle-btn" id="btnSimulator" role="tab" tabindex="0">Simulator</div>
+    <div class="toggle-btn" id="btnRealtime" role="tab" tabindex="0">Realtime</div>
   </div>
 
   <!-- Beam pattern controls -->
@@ -221,12 +246,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
   </div>
 
-  <!-- Live Sim controls -->
-  <div id="liveControls" class="hidden">
-    <div class="live-basic">
-    <div class="ctrl-row" id="liveGeoRow">
+  <!-- Simulator controls -->
+  <div id="simControls" class="hidden">
+    <div class="sim-basic">
+    <div class="ctrl-row" id="simGeoRow">
       <label>Geometry</label>
-      <select id="liveGeo">
+      <select id="simGeo">
         <option value="UCA">UCA (Circular Ring)</option>
         <option value="CROSS">Standing Cross</option>
         <option value="ULA">ULA (Linear)</option>
@@ -234,34 +259,51 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <option value="CUSTOM">Custom</option>
       </select>
     </div>
-    <div class="ctrl-row" id="liveMicCountRow">
-      <label>Mic Count: <span id="liveMicVal">12</span></label>
-      <input type="range" id="liveMicCount" min="4" max="32" step="1" value="12">
+    <button class="mat-preset-btn" id="btnLoadMiccanvas" type="button">Load MICCANVAS preset</button>
+    <div class="ctrl-row" id="simBeamMethodRow">
+      <label>Beamforming method</label>
+      <select id="simBeamMethod">
+        <option value="srp_phat" selected>SRP-PHAT (benchmark)</option>
+        <option value="steered_das">Mode 1: Steered DAS (scan + lock)</option>
+        <option value="beam_bank_das">Mode 2: K-beam bank (MUX select)</option>
+      </select>
     </div>
-    <div class="ctrl-row" id="liveRadiusRow">
-      <label>Radius: <span id="liveRadVal">0.15</span> m</label>
-      <input type="range" id="liveRadius" min="0.03" max="1.0" step="0.01" value="0.15">
+    <div class="ctrl-row hidden" id="simScanAnglesRow">
+      <label>Scan angles (deg, comma-sep)</label>
+      <input type="text" id="simScanAngles" value="0,45,90,135,180,225,270,315">
+    </div>l
+    <div class="ctrl-row hidden" id="simBeamKRow">
+      <label>K beams: <span id="simBeamKVal">8</span></label>
+      <input type="range" id="simBeamK" min="4" max="16" step="1" value="8">
     </div>
-    <div class="ctrl-row" id="liveSepRow">
-      <label>Ring Sep: <span id="liveSepVal">0.12</span> m</label>
-      <input type="range" id="liveSep" min="0.02" max="0.50" step="0.01" value="0.12">
+    <div class="ctrl-row" id="simMicCountRow">
+      <label>Mic Count: <span id="simMicVal">12</span></label>
+      <input type="range" id="simMicCount" min="4" max="32" step="1" value="12">
+    </div>
+    <div class="ctrl-row" id="simRadiusRow">
+      <label>Radius: <span id="simRadVal">0.15</span> m</label>
+      <input type="range" id="simRadius" min="0.03" max="1.0" step="0.01" value="0.15">
+    </div>
+    <div class="ctrl-row" id="simSepRow">
+      <label>Ring Sep: <span id="simSepVal">0.12</span> m</label>
+      <input type="range" id="simSep" min="0.02" max="0.50" step="0.01" value="0.12">
     </div>
     <hr class="sep">
     <div class="ctrl-row">
-      <label>Room Length: <span id="liveRoomLVal">50</span> m</label>
-      <input type="range" id="liveRoomL" min="10" max="100" step="1" value="50">
+      <label>Room Length: <span id="simRoomLVal">50</span> m</label>
+      <input type="range" id="simRoomL" min="10" max="100" step="1" value="50">
     </div>
     <div class="ctrl-row">
-      <label>Room Width: <span id="liveRoomWVal">40</span> m</label>
-      <input type="range" id="liveRoomW" min="10" max="80" step="1" value="40">
+      <label>Room Width: <span id="simRoomWVal">40</span> m</label>
+      <input type="range" id="simRoomW" min="10" max="80" step="1" value="40">
     </div>
     <div class="ctrl-row">
-      <label>Room Height: <span id="liveRoomHVal">12</span> m</label>
-      <input type="range" id="liveRoomH" min="4" max="15" step="1" value="12">
+      <label>Room Height: <span id="simRoomHVal">12</span> m</label>
+      <input type="range" id="simRoomH" min="4" max="15" step="1" value="12">
     </div>
     <div class="ctrl-row">
-      <label>RT60: <span id="liveRT60Val">1.5</span> s</label>
-      <input type="range" id="liveRT60" min="0" max="2.5" step="0.1" value="1.5">
+      <label>RT60: <span id="simRT60Val">1.5</span> s</label>
+      <input type="range" id="simRT60" min="0" max="2.5" step="0.1" value="1.5">
     </div>
     <div class="absorption-radio">
       <label><input type="radio" name="absMode" id="absRT60" value="rt60" checked>RT60 slider</label>
@@ -278,98 +320,110 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <button class="mat-preset-btn hidden" id="btnExhibitionHall">Exhibition Hall preset</button>
     <hr class="sep">
     <div class="ctrl-row">
-      <label>Source Az: <span id="liveSrcAzVal">60</span> deg</label>
-      <input type="range" id="liveSrcAz" min="0" max="355" step="5" value="60">
+      <label>Source Az: <span id="simSrcAzVal">60</span> deg</label>
+      <input type="range" id="simSrcAz" min="0" max="355" step="5" value="60">
     </div>
     <div class="ctrl-row">
-      <label>Source El: <span id="liveSrcElVal">30</span> deg</label>
-      <input type="range" id="liveSrcEl" min="-90" max="90" step="5" value="30">
+      <label>Source El: <span id="simSrcElVal">30</span> deg</label>
+      <input type="range" id="simSrcEl" min="-90" max="90" step="5" value="30">
     </div>
     <div class="ctrl-row">
-      <label>Source Dist: <span id="liveSrcDistVal">6.0</span> m</label>
-      <input type="range" id="liveSrcDist" min="2" max="20" step="0.5" value="6">
+      <label>Source Dist: <span id="simSrcDistVal">6.0</span> m</label>
+      <input type="range" id="simSrcDist" min="2" max="20" step="0.5" value="6">
     </div>
     <hr class="sep">
     <div class="ctrl-row">
-      <label>Drone SPL: <span id="liveDroneSPLVal">78</span> dB @ 1m</label>
-      <input type="range" id="liveDroneSPL" min="60" max="95" step="1" value="78">
+      <label>Drone SPL: <span id="simDroneSPLVal">78</span> dB @ 1m</label>
+      <input type="range" id="simDroneSPL" min="60" max="95" step="1" value="78">
     </div>
     <div class="check-row">
-      <input type="checkbox" id="liveDiffuse" checked>
+      <input type="checkbox" id="simDiffuse" checked>
       <label>Realistic room mode (crowd + PA)</label>
     </div>
     </div>
-    <details class="advanced-settings" id="liveAdvanced">
+    <details class="advanced-settings" id="simAdvanced">
       <summary>Advanced settings</summary>
+    <div class="ctrl-row">
+      <label>FracDelay MAX: <span id="simFracMaxVal">8</span> samples</label>
+      <input type="range" id="simFracMax" min="4" max="64" step="1" value="8">
+    </div>
+    <div class="ctrl-row">
+      <label>FracDelay taps: <span id="simFracTapsVal">16</span></label>
+      <input type="range" id="simFracTaps" min="8" max="32" step="1" value="16">
+    </div>
+    <div class="ctrl-row">
+      <label>Target DSP fs: <span id="simTargetFsVal">48000</span> Hz</label>
+      <input type="range" id="simTargetFs" min="16000" max="96000" step="8000" value="48000">
+    </div>
     <hr class="sep">
     <div class="ctrl-row">
-      <label>Crowd SPL: <span id="liveCrowdSPLVal">67</span> dB @ 1m</label>
-      <input type="range" id="liveCrowdSPL" min="55" max="80" step="1" value="67">
+      <label>Crowd SPL: <span id="simCrowdSPLVal">67</span> dB @ 1m</label>
+      <input type="range" id="simCrowdSPL" min="55" max="80" step="1" value="67">
     </div>
     <div class="ctrl-row">
-      <label>PA SPL: <span id="livePASPLVal">80</span> dB @ 1m</label>
-      <input type="range" id="livePASPL" min="70" max="100" step="1" value="80">
+      <label>PA SPL: <span id="simPASPLVal">80</span> dB @ 1m</label>
+      <input type="range" id="simPASPL" min="70" max="100" step="1" value="80">
     </div>
     <div class="ctrl-row">
-      <label>Mic Noise Floor: <span id="liveMicFloorVal">30</span> dB SPL</label>
-      <input type="range" id="liveMicFloor" min="20" max="50" step="1" value="30">
+      <label>Mic Noise Floor: <span id="simMicFloorVal">30</span> dB SPL</label>
+      <input type="range" id="simMicFloor" min="20" max="50" step="1" value="30">
     </div>
     <hr class="sep">
     <div class="check-row">
-      <input type="checkbox" id="liveRandSeed" checked>
+      <input type="checkbox" id="simRandSeed" checked>
       <label>Random seed</label>
     </div>
-    <div class="ctrl-row hidden" id="liveSeedRow">
-      <label>Seed: <span id="liveSeedVal">0</span></label>
-      <input type="range" id="liveSeed" min="0" max="999" step="1" value="0">
+    <div class="ctrl-row hidden" id="simSeedRow">
+      <label>Seed: <span id="simSeedVal">0</span></label>
+      <input type="range" id="simSeed" min="0" max="999" step="1" value="0">
     </div>
     <div class="ctrl-row">
-      <label>Crowd Sources: <span id="liveCrowdVal">30</span></label>
-      <input type="range" id="liveCrowd" min="0" max="100" step="1" value="30">
+      <label>Crowd Sources: <span id="simCrowdVal">30</span></label>
+      <input type="range" id="simCrowd" min="0" max="100" step="1" value="30">
     </div>
     <div class="ctrl-row">
-      <label>PA Sources: <span id="livePAVal">8</span></label>
-      <input type="range" id="livePA" min="0" max="12" step="1" value="8">
+      <label>PA Sources: <span id="simPAVal">8</span></label>
+      <input type="range" id="simPA" min="0" max="12" step="1" value="8">
     </div>
     <div class="ctrl-row">
       <label>Crowd model (Phase 3)</label>
-      <select id="liveCrowdModel">
+      <select id="simCrowdModel">
         <option value="point_source" selected>Point sources (2b)</option>
         <option value="plane_wave">Plane-wave diffuse (3B)</option>
       </select>
     </div>
     <div class="impairment-detail" id="crowdModelDetail">
-      <label>Plane waves: <span id="liveNPlaneWavesVal">64</span></label>
-      <input type="range" id="liveNPlaneWaves" min="8" max="128" step="8" value="64">
+      <label>Plane waves: <span id="simNPlaneWavesVal">64</span></label>
+      <input type="range" id="simNPlaneWaves" min="8" max="128" step="8" value="64">
     </div>
     <div class="check-row">
-      <input type="checkbox" id="liveMismatch">
+      <input type="checkbox" id="simMismatch">
       <label>Mic gain/phase mismatch</label>
     </div>
     <div class="check-row">
-      <input type="checkbox" id="liveCrosstalk">
+      <input type="checkbox" id="simCrosstalk">
       <label>Crosstalk</label>
     </div>
     <div class="impairment-detail" id="crosstalkDetail">
-      <label>Coupling: <span id="liveCrosstalkDbVal">-40</span> dB</label>
-      <input type="range" id="liveCrosstalkDb" min="-60" max="-20" step="1" value="-40">
+      <label>Coupling: <span id="simCrosstalkDbVal">-40</span> dB</label>
+      <input type="range" id="simCrosstalkDb" min="-60" max="-20" step="1" value="-40">
       <label style="margin-top:6px;display:block;">Model (Phase 3)</label>
-      <select id="liveCrosstalkModel">
+      <select id="simCrosstalkModel">
         <option value="simple" selected>Simple (flat)</option>
         <option value="fir_capacitive">FIR capacitive</option>
       </select>
-      <label id="liveCrosstalkCornerLabel" style="margin-top:6px;display:none;">
-        Corner: <span id="liveCrosstalkCornerVal">500</span> Hz
+      <label id="simCrosstalkCornerLabel" style="margin-top:6px;display:none;">
+        Corner: <span id="simCrosstalkCornerVal">500</span> Hz
       </label>
-      <input type="range" id="liveCrosstalkCorner" min="20" max="4000" step="20" value="500" style="display:none;">
+      <input type="range" id="simCrosstalkCorner" min="20" max="4000" step="20" value="500" style="display:none;">
     </div>
     <div class="check-row">
-      <input type="checkbox" id="liveQuant">
+      <input type="checkbox" id="simQuant">
       <label>Codec quantization</label>
     </div>
     <div class="impairment-detail" id="quantDetail">
       <label>Bit depth</label>
-      <select id="liveBitDepth">
+      <select id="simBitDepth">
         <option value="24">24 bit</option>
         <option value="16" selected>16 bit</option>
         <option value="12">12 bit</option>
@@ -377,87 +431,130 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </select>
     </div>
     <div class="check-row">
-      <input type="checkbox" id="liveMlPreview">
+      <input type="checkbox" id="simMlPreview">
       <label>MAX78000 ML preview (Phase 3)</label>
     </div>
     <div class="impairment-detail" id="mlPreviewDetail">
       <label>Audio bit depth</label>
-      <select id="liveMlBitDepth">
+      <select id="simMlBitDepth">
         <option value="16">16 bit</option>
         <option value="8" selected>8 bit</option>
       </select>
       <label style="margin-top:6px;display:block;">Feature bit depth</label>
-      <select id="liveMlFeatBitDepth">
+      <select id="simMlFeatBitDepth">
         <option value="16">16 bit</option>
         <option value="8" selected>8 bit</option>
       </select>
-      <label style="margin-top:6px;display:block;">Mel bands: <span id="liveMlNMelsVal">64</span></label>
-      <input type="range" id="liveMlNMels" min="32" max="96" step="16" value="64">
+      <label style="margin-top:6px;display:block;">Mel bands: <span id="simMlNMelsVal">64</span></label>
+      <input type="range" id="simMlNMels" min="32" max="96" step="16" value="64">
     </div>
     <button class="hw-preset-btn" id="btnHwPreset">Hardware-realistic preset</button>
 
     <hr class="sep">
     <div style="font-size:10.5px;font-weight:500;color:#888;font-family:'DM Mono',monospace;margin-bottom:6px;">Atmosphere (Phase 2b)</div>
     <div class="ctrl-row">
-      <label>Temperature: <span id="liveTempVal">20</span> &deg;C</label>
-      <input type="range" id="liveTemp" min="0" max="40" step="1" value="20">
+      <label>Temperature: <span id="simTempVal">20</span> &deg;C</label>
+      <input type="range" id="simTemp" min="0" max="40" step="1" value="20">
     </div>
     <div class="ctrl-row">
-      <label>Humidity: <span id="liveHumidityVal">50</span> %</label>
-      <input type="range" id="liveHumidity" min="10" max="90" step="5" value="50">
+      <label>Humidity: <span id="simHumidityVal">50</span> %</label>
+      <input type="range" id="simHumidity" min="10" max="90" step="5" value="50">
     </div>
     <div class="ctrl-row">
-      <label>Temp gradient dT/dz: <span id="liveTempGradVal">0.0</span> &deg;C/m</label>
-      <input type="range" id="liveTempGrad" min="-5" max="5" step="0.1" value="0.0">
+      <label>Temp gradient dT/dz: <span id="simTempGradVal">0.0</span> &deg;C/m</label>
+      <input type="range" id="simTempGrad" min="-5" max="5" step="0.1" value="0.0">
     </div>
 
     <hr class="sep">
     <div style="font-size:10.5px;font-weight:500;color:#888;font-family:'DM Mono',monospace;margin-bottom:6px;">DOA band (Phase 3+)</div>
     <div class="ctrl-row">
-      <label>DOA fmin: <span id="liveFminVal">200</span> Hz</label>
-      <input type="range" id="liveFmin" min="50" max="4000" step="50" value="200">
+      <label>DOA fmin: <span id="simFminVal">200</span> Hz</label>
+      <input type="range" id="simFmin" min="50" max="4000" step="50" value="200">
     </div>
     <div class="ctrl-row">
-      <label>DOA fmax: <span id="liveFmaxVal">2000</span> Hz</label>
-      <input type="range" id="liveFmax" min="200" max="7000" step="50" value="2000">
+      <label>DOA fmax: <span id="simFmaxVal">2000</span> Hz</label>
+      <input type="range" id="simFmax" min="200" max="7000" step="50" value="2000">
     </div>
     <div class="check-row">
-      <input type="checkbox" id="liveHarmonicComb">
+      <input type="checkbox" id="simHarmonicComb">
       <label>Harmonic comb weighting</label>
     </div>
     <div class="impairment-detail" id="harmonicCombDetail">
-      <label>Drone fundamental f0: <span id="liveFundamentalVal">200</span> Hz</label>
-      <input type="range" id="liveFundamental" min="80" max="400" step="5" value="200">
+      <label>Drone fundamental f0: <span id="simFundamentalVal">200</span> Hz</label>
+      <input type="range" id="simFundamental" min="80" max="400" step="5" value="200">
     </div>
     <div class="check-row">
-      <input type="checkbox" id="liveNormalizeAudio" checked>
+      <input type="checkbox" id="simNormalizeAudio" checked>
       <label title="On: each run's .wav is peak-normalized for easy playback. Off: downloads preserve absolute Pascal amplitude across trials -- use for 1/r^2 or other level-comparison tests.">Normalize downloaded audio</label>
     </div>
 
     <hr class="sep">
     <div class="check-row">
-      <input type="checkbox" id="liveMoving">
+      <input type="checkbox" id="simMoving">
       <label>Moving source (Phase 2b)</label>
     </div>
     <div class="impairment-detail" id="movingDetail">
       <label>Trajectory type</label>
-      <select id="liveTrajType">
+      <select id="simTrajType">
         <option value="straight" selected>Straight line</option>
         <option value="arc">Circular arc</option>
       </select>
-      <label style="margin-top:6px;display:block;">Speed: <span id="liveSpeedVal">5.0</span> m/s</label>
-      <input type="range" id="liveSpeed" min="0" max="30" step="0.5" value="5">
-      <label id="liveHeadingLabel" style="margin-top:6px;display:block;">Heading: <span id="liveHeadingVal">0</span> &deg;</label>
-      <input type="range" id="liveHeading" min="0" max="355" step="5" value="0">
-      <label style="margin-top:6px;display:block;">Trajectory chunks: <span id="liveChunksVal">8</span></label>
-      <input type="range" id="liveChunks" min="4" max="16" step="1" value="8">
+      <label style="margin-top:6px;display:block;">Speed: <span id="simSpeedVal">5.0</span> m/s</label>
+      <input type="range" id="simSpeed" min="0" max="30" step="0.5" value="5">
+      <label id="simHeadingLabel" style="margin-top:6px;display:block;">Heading: <span id="simHeadingVal">0</span> &deg;</label>
+      <input type="range" id="simHeading" min="0" max="355" step="5" value="0">
+      <label style="margin-top:6px;display:block;">Trajectory chunks: <span id="simChunksVal">8</span></label>
+      <input type="range" id="simChunks" min="4" max="16" step="1" value="8">
     </div>
 
     <div class="ctrl-row">
-      <label>Integration: <span id="liveIntVal">1000</span> ms</label>
-      <input type="range" id="liveInt" min="50" max="1000" step="50" value="1000">
+      <label>Integration: <span id="simIntVal">1000</span> ms</label>
+      <input type="range" id="simInt" min="50" max="1000" step="50" value="1000">
     </div>
     </details>
+  </div>
+
+  <div id="realtimeControls" class="hidden">
+    <div class="ctrl-row">
+      <label>Geometry</label>
+      <select id="rtGeo">
+        <option value="UCA">UCA</option>
+        <option value="CROSS">CROSS</option>
+        <option value="ULA">ULA</option>
+        <option value="CYLINDER">CYLINDER</option>
+        <option value="CUSTOM">Custom</option>
+      </select>
+    </div>
+    <button class="mat-preset-btn" id="btnRtMiccanvas" type="button">Load MICCANVAS preset</button>
+    <div class="ctrl-row">
+      <label>Beam method</label>
+      <select id="rtBeamMethod">
+        <option value="steered_das">Mode 1: Steered DAS</option>
+        <option value="beam_bank_das" selected>Mode 2: K-beam bank</option>
+      </select>
+    </div>
+    <div class="ctrl-row">
+      <label>K beams: <span id="rtBeamKVal">8</span></label>
+      <input type="range" id="rtBeamK" min="4" max="16" step="1" value="8">
+    </div>
+    <div class="ctrl-row">
+      <label>Integration: <span id="rtIntVal">100</span> ms</label>
+      <input type="range" id="rtInt" min="50" max="500" step="50" value="100">
+    </div>
+    <div class="ctrl-row">
+      <label>Elevation: <span id="rtElVal">0</span> deg</label>
+      <input type="range" id="rtEl" min="-30" max="60" step="5" value="0">
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="rtDiffuse" checked>
+      <label>Crowd + PA interference</label>
+    </div>
+    <div class="ctrl-row">
+      <label>Crowd count: <span id="rtCrowdVal">30</span></label>
+      <input type="range" id="rtCrowd" min="0" max="80" step="1" value="30">
+    </div>
+    <button type="button" id="btnRtPause" class="mat-preset-btn">Pause</button>
+    <div id="rtStatus" class="rt-status">Connecting...</div>
   </div>
 
   <hr class="sep">
@@ -475,6 +572,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 
 <div id="info" class="panel">
   <div id="infoText"></div>
+  <div id="mipsText" style="margin-top:4px;font-family:'DM Mono',monospace;font-size:10px;color:#8fb9d8;"></div>
+  <div id="beamPolarWrap" class="hidden" style="margin-top:6px;">
+    <div class="heatmap-label"><span>Beam scan power</span><span id="beamPolarRange"></span></div>
+    <canvas id="beamPolar" width="280" height="280"></canvas>
+  </div>
   <div id="heatmapWrap" class="hidden">
     <div class="heatmap-label"><span>SRP-PHAT power (az × el)</span><span id="heatmapRange"></span></div>
     <canvas id="heatmapCanvas" width="72" height="19"></canvas>
@@ -524,6 +626,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 </div>
 
 <canvas id="canvas3d"></canvas>
+
+<div id="realtimeWrap" class="hidden">
+  <canvas id="birdsEye"></canvas>
+  <div id="rtMetrics"></div>
+  <div id="rtGeoOverlay">—</div>
+  <div id="rtTimeline"><canvas id="rtTimelineCanvas"></canvas></div>
+</div>
 
 <script type="importmap">
 {"imports":{"three":"https://esm.sh/three@0.162.0","three/addons/":"https://esm.sh/three@0.162.0/examples/jsm/"}}
@@ -999,6 +1108,15 @@ let currentPower = [];
 let customMicPositions = [];
 let customSelectedIdx = -1;
 let customSeedGeometry = 'UCA';
+const MICCANVAS_POSITIONS = [
+  [0.000, 0.000, 0.000],
+  [0.010, 0.000, 0.000], [0.005, 0.008660254, 0.000], [-0.005, 0.008660254, 0.000],
+  [-0.010, 0.000, 0.000], [-0.005, -0.008660254, 0.000], [0.005, -0.008660254, 0.000],
+  [0.018477591, 0.007653669, 0.000], [0.007653669, 0.018477591, 0.000],
+  [-0.007653669, 0.018477591, 0.000], [-0.018477591, 0.007653669, 0.000],
+  [-0.018477591, -0.007653669, 0.000], [-0.007653669, -0.018477591, 0.000],
+  [0.007653669, -0.018477591, 0.000], [0.018477591, -0.007653669, 0.000],
+];
 
 // ── DOM refs ──
 const elSelGeo = document.getElementById('selGeo');
@@ -1011,10 +1129,14 @@ const elFreq = document.getElementById('freq');
 const elDispRadius = document.getElementById('dispRadius');
 const elOpacity = document.getElementById('opacity');
 const elInfo = document.getElementById('infoText');
+const elMips = document.getElementById('mipsText');
 const elHeatmapWrap = document.getElementById('heatmapWrap');
 const elHeatmapCanvas = document.getElementById('heatmapCanvas');
 const elHeatmapRange = document.getElementById('heatmapRange');
 const elTopCand = document.getElementById('topCandidates');
+const elBeamPolarWrap = document.getElementById('beamPolarWrap');
+const elBeamPolar = document.getElementById('beamPolar');
+const elBeamPolarRange = document.getElementById('beamPolarRange');
 
 function fmtCoord(v) {
   return Number(v).toFixed(4).replace(/\.?0+$/, '');
@@ -1039,18 +1161,85 @@ function setCustomClipNotes(notes) {
     return;
   }
   const lines = notes.map(n => {
+    if (n.axis) {
+      const micNo = (Number.isInteger(n.idx) ? n.idx + 1 : '?');
+      return `Mic #${micNo} clipped on ${n.axis}: ${Number(n.before).toFixed(3)} -> ${Number(n.after).toFixed(3)} m`;
+    }
     const micNo = (Number.isInteger(n.idx) ? n.idx + 1 : '?');
-    return `Mic #${micNo} clipped on ${n.axis}: ${Number(n.before).toFixed(3)} -> ${Number(n.after).toFixed(3)} m`;
+    const angle = (n.angle_deg !== undefined) ? ` at ${Number(n.angle_deg).toFixed(0)}°` : '';
+    return `FracDelay clamp${angle}: mic #${micNo} needed ${Number(n.before_samples).toFixed(2)} samples, MAX=${Number(n.max_samples).toFixed(0)}`;
   });
   banner.innerHTML = `<button type="button" class="custom-clip-dismiss" id="btnCustomClipDismiss">x</button>${lines.join('<br>')}`;
   banner.classList.remove('hidden');
   document.getElementById('btnCustomClipDismiss').addEventListener('click', clearCustomClipNotes);
 }
 
+function renderMipsReadout(mips) {
+  if (!mips) {
+    elMips.textContent = '';
+    return;
+  }
+  const pct = Number(mips.budget_used_pct || 0).toFixed(1);
+  const ops = Number(mips.ops_per_sample || 0).toFixed(0);
+  const scan = (mips.scan_latency_s !== null && mips.scan_latency_s !== undefined)
+    ? ` | scan ${Number(mips.scan_latency_s).toFixed(2)}s`
+    : '';
+  elMips.textContent = `MIPS ${mips.method}: ${ops} ops/sample (${pct}% of 6144)${scan}`;
+}
+
+function renderBeamPolar(scan) {
+  if (!scan || !Array.isArray(scan.angles_deg) || !scan.angles_deg.length) {
+    elBeamPolarWrap.classList.add('hidden');
+    return;
+  }
+  elBeamPolarWrap.classList.remove('hidden');
+  const angles = scan.angles_deg;
+  const powers = scan.powers_db || [];
+  const argmax = Number(scan.argmax_idx || 0);
+  const ctx = elBeamPolar.getContext('2d');
+  const W = elBeamPolar.width, H = elBeamPolar.height;
+  const cx = W / 2, cy = H / 2;
+  const rMax = Math.min(W, H) * 0.42;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(10,10,20,0.95)';
+  ctx.fillRect(0, 0, W, H);
+
+  const pMin = Math.min(...powers);
+  const pMax = Math.max(...powers);
+  const span = Math.max(pMax - pMin, 1e-9);
+  elBeamPolarRange.textContent = `${pMax.toFixed(1)}..${pMin.toFixed(1)} dB`;
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  for (let i = 1; i <= 4; i++) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, (rMax * i) / 4, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  const barWidth = (2 * Math.PI) / angles.length;
+  for (let i = 0; i < angles.length; i++) {
+    const a = (angles[i] * Math.PI / 180);
+    const norm = (powers[i] - pMin) / span;
+    const r = rMax * (0.15 + 0.85 * norm);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, a - barWidth * 0.45, a + barWidth * 0.45);
+    ctx.closePath();
+    ctx.fillStyle = (i === argmax) ? 'rgba(126,207,255,0.9)' : 'rgba(180,180,180,0.35)';
+    ctx.fill();
+  }
+}
+
+function updateBeamMethodUi() {
+  const method = document.getElementById('simBeamMethod').value;
+  document.getElementById('simScanAnglesRow').classList.toggle('hidden', method !== 'steered_das');
+  document.getElementById('simBeamKRow').classList.toggle('hidden', method !== 'beam_bank_das');
+}
+
 function updateRunEnabled() {
   const btn = document.getElementById('btnRun');
   if (!btn) return;
-  const isCustom = document.getElementById('liveGeo').value === 'CUSTOM';
+  const isCustom = document.getElementById('simGeo').value === 'CUSTOM';
   btn.disabled = isCustom && customMicPositions.length < 2;
 }
 
@@ -1059,11 +1248,11 @@ function updateCustomArrayVisibility() {
   if (!block) return;
 
   const beamCustom = mode === 'beam' && elSelGeo.value === 'CUSTOM';
-  const liveCustom = mode === 'live' && document.getElementById('liveGeo').value === 'CUSTOM';
+  const liveCustom = mode === 'sim' && document.getElementById('simGeo').value === 'CUSTOM';
   if (beamCustom) {
     document.getElementById('beamGeoRow').insertAdjacentElement('afterend', block);
   } else if (liveCustom) {
-    document.getElementById('liveGeoRow').insertAdjacentElement('afterend', block);
+    document.getElementById('simGeoRow').insertAdjacentElement('afterend', block);
   }
   block.classList.toggle('hidden', !(beamCustom || liveCustom));
 
@@ -1071,9 +1260,9 @@ function updateCustomArrayVisibility() {
   document.getElementById('beamRadiusRow').classList.toggle('hidden', beamCustom);
   document.getElementById('sepRow').classList.toggle('hidden', beamCustom || elSelGeo.value !== 'CYLINDER');
 
-  document.getElementById('liveMicCountRow').classList.toggle('hidden', liveCustom);
-  document.getElementById('liveRadiusRow').classList.toggle('hidden', liveCustom);
-  document.getElementById('liveSepRow').classList.toggle('hidden', liveCustom || document.getElementById('liveGeo').value !== 'CYLINDER');
+  document.getElementById('simMicCountRow').classList.toggle('hidden', liveCustom);
+  document.getElementById('simRadiusRow').classList.toggle('hidden', liveCustom);
+  document.getElementById('simSepRow').classList.toggle('hidden', liveCustom || document.getElementById('simGeo').value !== 'CYLINDER');
   updateRunEnabled();
 }
 
@@ -1192,9 +1381,9 @@ function customSeedFromPreset() {
     radius = parseFloat(elRadius.value);
     sep = parseFloat(elSep.value);
   } else {
-    nMics = parseInt(document.getElementById('liveMicCount').value);
-    radius = parseFloat(document.getElementById('liveRadius').value);
-    sep = parseFloat(document.getElementById('liveSep').value);
+    nMics = parseInt(document.getElementById('simMicCount').value);
+    radius = parseFloat(document.getElementById('simRadius').value);
+    sep = parseFloat(document.getElementById('simSep').value);
   }
   customMicPositions = buildGeometry(customSeedGeometry, nMics, radius, sep)
     .map(p => [Number(p[0]), Number(p[1]), Number(p[2])]);
@@ -1229,7 +1418,7 @@ function setCustomSelected(idx) {
   customSelectedIdx = idx;
   renderCustomList();
   if ((mode === 'beam' && elSelGeo.value === 'CUSTOM') ||
-      (mode === 'live' && document.getElementById('liveGeo').value === 'CUSTOM')) {
+      (mode === 'sim' && document.getElementById('simGeo').value === 'CUSTOM')) {
     renderMics(currentMics, customSelectedIdx);
   }
 }
@@ -1351,14 +1540,28 @@ function refresh() {
   roomGroup.clear();
   sourceGroup.clear();
   document.getElementById('rirWrap').classList.remove('visible');
+  if (mode !== 'sim' && mode !== 'realtime') {
+    renderBeamPolar(null);
+    renderMipsReadout(null);
+  }
 }
 
 // ── Mode toggle ──
 function setMode(m) {
   mode = m;
-  ['btnBeam','btnSRP','btnLive'].forEach(id => document.getElementById(id).classList.remove('active'));
-  ['beamControls','srpControls','liveControls'].forEach(id => document.getElementById(id).classList.add('hidden'));
-  document.getElementById('btnRun').classList.toggle('hidden', m !== 'live');
+  ['btnBeam','btnSRP','btnSimulator','btnRealtime'].forEach(id => {
+    document.getElementById(id).classList.remove('active');
+  });
+  ['beamControls','srpControls','simControls','realtimeControls'].forEach(id => {
+    document.getElementById(id).classList.add('hidden');
+  });
+  document.getElementById('btnRun').classList.toggle('hidden', m !== 'sim');
+  document.body.classList.toggle('realtime-mode', m === 'realtime');
+  document.getElementById('realtimeWrap').classList.toggle('hidden', m !== 'realtime');
+
+  if (m === 'realtime') stopOneShotExtras();
+  else stopRealtimeSession();
+
   if (m === 'beam') {
     document.getElementById('btnBeam').classList.add('active');
     document.getElementById('beamControls').classList.remove('hidden');
@@ -1367,61 +1570,71 @@ function setMode(m) {
     document.getElementById('btnSRP').classList.add('active');
     document.getElementById('srpControls').classList.remove('hidden');
     refresh();
-  } else {
-    document.getElementById('btnLive').classList.add('active');
-    document.getElementById('liveControls').classList.remove('hidden');
+  } else if (m === 'sim') {
+    document.getElementById('btnSimulator').classList.add('active');
+    document.getElementById('simControls').classList.remove('hidden');
     updateLiveLabels();
+  } else if (m === 'realtime') {
+    document.getElementById('btnRealtime').classList.add('active');
+    document.getElementById('realtimeControls').classList.remove('hidden');
+    startRealtimeSession();
   }
   updateCustomArrayVisibility();
   renderCustomList();
 }
 document.getElementById('btnBeam').addEventListener('click', () => setMode('beam'));
 document.getElementById('btnSRP').addEventListener('click', () => setMode('srp'));
-document.getElementById('btnLive').addEventListener('click', () => setMode('live'));
+document.getElementById('btnSimulator').addEventListener('click', () => setMode('sim'));
+document.getElementById('btnRealtime').addEventListener('click', () => setMode('realtime'));
 
 // ── Live sim label updaters ──
-const liveSliders = {
-  liveMicCount: 'liveMicVal', liveRadius: 'liveRadVal', liveSep: 'liveSepVal',
-  liveRoomL: 'liveRoomLVal', liveRoomW: 'liveRoomWVal', liveRoomH: 'liveRoomHVal',
-  liveRT60: 'liveRT60Val', liveSrcAz: 'liveSrcAzVal', liveSrcEl: 'liveSrcElVal',
-  liveSrcDist: 'liveSrcDistVal',
-  liveDroneSPL: 'liveDroneSPLVal', liveCrowdSPL: 'liveCrowdSPLVal',
-  livePASPL: 'livePASPLVal', liveMicFloor: 'liveMicFloorVal',
-  liveSeed: 'liveSeedVal',
-  liveCrowd: 'liveCrowdVal', livePA: 'livePAVal', liveInt: 'liveIntVal',
-  liveTemp: 'liveTempVal', liveHumidity: 'liveHumidityVal',
-  liveTempGrad: 'liveTempGradVal',
-  liveSpeed: 'liveSpeedVal', liveHeading: 'liveHeadingVal',
-  liveChunks: 'liveChunksVal',
+const simSliders = {
+  simMicCount: 'simMicVal', simRadius: 'simRadVal', simSep: 'simSepVal',
+  simRoomL: 'simRoomLVal', simRoomW: 'simRoomWVal', simRoomH: 'simRoomHVal',
+  simRT60: 'simRT60Val', simSrcAz: 'simSrcAzVal', simSrcEl: 'simSrcElVal',
+  simSrcDist: 'simSrcDistVal',
+  simDroneSPL: 'simDroneSPLVal', simCrowdSPL: 'simCrowdSPLVal',
+  simPASPL: 'simPASPLVal', simMicFloor: 'simMicFloorVal',
+  simSeed: 'simSeedVal',
+  simCrowd: 'simCrowdVal', simPA: 'simPAVal', simInt: 'simIntVal',
+  simTemp: 'simTempVal', simHumidity: 'simHumidityVal',
+  simTempGrad: 'simTempGradVal',
+  simSpeed: 'simSpeedVal', simHeading: 'simHeadingVal',
+  simChunks: 'simChunksVal',
+  simBeamK: 'simBeamKVal',
+  simFracMax: 'simFracMaxVal',
+  simFracTaps: 'simFracTapsVal',
+  simTargetFs: 'simTargetFsVal',
 };
 function updateLiveLabels() {
-  for (const [sliderId, valId] of Object.entries(liveSliders)) {
+  for (const [sliderId, valId] of Object.entries(simSliders)) {
     const el = document.getElementById(sliderId);
     if (el) document.getElementById(valId).textContent = el.value;
   }
-  const geo = document.getElementById('liveGeo').value;
+  const geo = document.getElementById('simGeo').value;
   if (geo !== 'CUSTOM') customSeedGeometry = geo;
   updateCustomArrayVisibility();
-  const rand = document.getElementById('liveRandSeed').checked;
-  document.getElementById('liveSeedRow').classList.toggle('hidden', rand);
+  const rand = document.getElementById('simRandSeed').checked;
+  document.getElementById('simSeedRow').classList.toggle('hidden', rand);
   // Heading is only meaningful for straight trajectories -- hide it for arc.
-  const traj = document.getElementById('liveTrajType');
-  const headLabel = document.getElementById('liveHeadingLabel');
-  const headSlider = document.getElementById('liveHeading');
+  const traj = document.getElementById('simTrajType');
+  const headLabel = document.getElementById('simHeadingLabel');
+  const headSlider = document.getElementById('simHeading');
   if (traj && headLabel && headSlider) {
     const isArc = traj.value === 'arc';
     headLabel.style.display = isArc ? 'none' : 'block';
     headSlider.style.display = isArc ? 'none' : 'block';
   }
 }
-Object.keys(liveSliders).forEach(id => {
+Object.keys(simSliders).forEach(id => {
   document.getElementById(id).addEventListener('input', updateLiveLabels);
 });
-document.getElementById('liveGeo').addEventListener('change', () => {
+document.getElementById('simGeo').addEventListener('change', () => {
   updateLiveLabels();
   renderCustomList();
 });
-document.getElementById('liveRandSeed').addEventListener('change', updateLiveLabels);
+document.getElementById('simRandSeed').addEventListener('change', updateLiveLabels);
+document.getElementById('simBeamMethod').addEventListener('change', updateBeamMethodUi);
 
 // ── Live simulation ──
 let audioUrls = {raw: null, unsteered: null, beam: null, ml: null};
@@ -1464,10 +1677,22 @@ document.getElementById('btnAudioUnsteered').addEventListener('click', () => set
 document.getElementById('btnAudioBeam').addEventListener('click', () => setAudioMode('beam'));
 document.getElementById('btnAudioMl').addEventListener('click', () => setAudioMode('ml'));
 
-async function runLiveSimulation() {
+function parseScanAnglesDeg(raw) {
+  const vals = String(raw || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(Number)
+    .filter(v => Number.isFinite(v))
+    .map(v => ((v % 360) + 360) % 360);
+  const uniq = [...new Set(vals.map(v => Number(v.toFixed(6))))];
+  return uniq.length ? uniq : [0,45,90,135,180,225,270,315];
+}
+
+async function runOneShotSimulation() {
   const btn = document.getElementById('btnRun');
-  const liveGeo = document.getElementById('liveGeo').value;
-  if (liveGeo === 'CUSTOM' && customMicPositions.length < 2) {
+  const simGeo = document.getElementById('simGeo').value;
+  if (simGeo === 'CUSTOM' && customMicPositions.length < 2) {
     updateRunEnabled();
     elInfo.innerHTML = '<span style="color:#ffdd44">CUSTOM requires at least 2 mic positions before running.</span>';
     return;
@@ -1479,33 +1704,43 @@ async function runLiveSimulation() {
   revokeAudioUrls();
   elInfo.innerHTML = '<span class="val">Running simulation...</span>';
 
-  const useRand = document.getElementById('liveRandSeed').checked;
+  const useRand = document.getElementById('simRandSeed').checked;
+  const beamMethod = document.getElementById('simBeamMethod').value;
+  const beamK = parseInt(document.getElementById('simBeamK').value);
+  const bankAngles = (beamMethod === 'beam_bank_das')
+    ? Array.from({length: beamK}, (_, i) => i * (360 / beamK))
+    : parseScanAnglesDeg(document.getElementById('simScanAngles').value);
   const params = {
-    geometry: liveGeo,
-    custom_mic_positions: liveGeo === 'CUSTOM' ? customMicPositions.map(p => [p[0], p[1], p[2]]) : null,
-    mic_count: parseInt(document.getElementById('liveMicCount').value),
-    radius: parseFloat(document.getElementById('liveRadius').value),
-    ring_separation: parseFloat(document.getElementById('liveSep').value),
-    room_length: parseFloat(document.getElementById('liveRoomL').value),
-    room_width: parseFloat(document.getElementById('liveRoomW').value),
-    room_height: parseFloat(document.getElementById('liveRoomH').value),
-    rt60: parseFloat(document.getElementById('liveRT60').value),
-    source_az_deg: parseFloat(document.getElementById('liveSrcAz').value),
-    source_el_deg: parseFloat(document.getElementById('liveSrcEl').value),
-    source_distance: parseFloat(document.getElementById('liveSrcDist').value),
-    drone_spl_db: parseFloat(document.getElementById('liveDroneSPL').value),
-    crowd_spl_db: parseFloat(document.getElementById('liveCrowdSPL').value),
-    pa_spl_db: parseFloat(document.getElementById('livePASPL').value),
-    mic_noise_floor_db: parseFloat(document.getElementById('liveMicFloor').value),
-    seed: useRand ? -1 : parseInt(document.getElementById('liveSeed').value),
-    diffuse: document.getElementById('liveDiffuse').checked,
-    crowd_count: parseInt(document.getElementById('liveCrowd').value),
-    pa_count: parseInt(document.getElementById('livePA').value),
-    mic_mismatch: document.getElementById('liveMismatch').checked,
-    crosstalk: document.getElementById('liveCrosstalk').checked,
-    crosstalk_db: parseFloat(document.getElementById('liveCrosstalkDb').value),
-    quantization: document.getElementById('liveQuant').checked,
-    bit_depth: parseInt(document.getElementById('liveBitDepth').value),
+    geometry: simGeo,
+    custom_mic_positions: simGeo === 'CUSTOM' ? customMicPositions.map(p => [p[0], p[1], p[2]]) : null,
+    beam_method: beamMethod,
+    beam_bank_angles_deg: bankAngles,
+    frac_delay_max_samples: parseInt(document.getElementById('simFracMax').value),
+    frac_delay_taps: parseInt(document.getElementById('simFracTaps').value),
+    target_fs_hz: parseInt(document.getElementById('simTargetFs').value),
+    mic_count: parseInt(document.getElementById('simMicCount').value),
+    radius: parseFloat(document.getElementById('simRadius').value),
+    ring_separation: parseFloat(document.getElementById('simSep').value),
+    room_length: parseFloat(document.getElementById('simRoomL').value),
+    room_width: parseFloat(document.getElementById('simRoomW').value),
+    room_height: parseFloat(document.getElementById('simRoomH').value),
+    rt60: parseFloat(document.getElementById('simRT60').value),
+    source_az_deg: parseFloat(document.getElementById('simSrcAz').value),
+    source_el_deg: parseFloat(document.getElementById('simSrcEl').value),
+    source_distance: parseFloat(document.getElementById('simSrcDist').value),
+    drone_spl_db: parseFloat(document.getElementById('simDroneSPL').value),
+    crowd_spl_db: parseFloat(document.getElementById('simCrowdSPL').value),
+    pa_spl_db: parseFloat(document.getElementById('simPASPL').value),
+    mic_noise_floor_db: parseFloat(document.getElementById('simMicFloor').value),
+    seed: useRand ? -1 : parseInt(document.getElementById('simSeed').value),
+    diffuse: document.getElementById('simDiffuse').checked,
+    crowd_count: parseInt(document.getElementById('simCrowd').value),
+    pa_count: parseInt(document.getElementById('simPA').value),
+    mic_mismatch: document.getElementById('simMismatch').checked,
+    crosstalk: document.getElementById('simCrosstalk').checked,
+    crosstalk_db: parseFloat(document.getElementById('simCrosstalkDb').value),
+    quantization: document.getElementById('simQuant').checked,
+    bit_depth: parseInt(document.getElementById('simBitDepth').value),
     absorption_mode: document.querySelector('input[name="absMode"]:checked').value,
     floor_material: document.getElementById('matFloor').value,
     ceiling_material: document.getElementById('matCeiling').value,
@@ -1513,28 +1748,28 @@ async function runLiveSimulation() {
     west_material: document.getElementById('matWest').value,
     south_material: document.getElementById('matSouth').value,
     north_material: document.getElementById('matNorth').value,
-    integration_ms: parseInt(document.getElementById('liveInt').value),
-    temperature_c: parseFloat(document.getElementById('liveTemp').value),
-    humidity_pct: parseFloat(document.getElementById('liveHumidity').value),
-    temp_gradient_c_per_m: parseFloat(document.getElementById('liveTempGrad').value),
-    moving_source: document.getElementById('liveMoving').checked,
-    trajectory_type: document.getElementById('liveTrajType').value,
-    speed_mps: parseFloat(document.getElementById('liveSpeed').value),
-    heading_deg: parseFloat(document.getElementById('liveHeading').value),
-    n_trajectory_chunks: parseInt(document.getElementById('liveChunks').value),
-    crowd_model: document.getElementById('liveCrowdModel').value,
-    n_plane_waves: parseInt(document.getElementById('liveNPlaneWaves').value),
-    crosstalk_model: document.getElementById('liveCrosstalkModel').value,
-    crosstalk_corner_hz: parseFloat(document.getElementById('liveCrosstalkCorner').value),
-    ml_preview: document.getElementById('liveMlPreview').checked,
-    ml_bit_depth: parseInt(document.getElementById('liveMlBitDepth').value),
-    ml_feature_bit_depth: parseInt(document.getElementById('liveMlFeatBitDepth').value),
-    ml_n_mels: parseInt(document.getElementById('liveMlNMels').value),
-    fmin_hz: parseFloat(document.getElementById('liveFmin').value),
-    fmax_hz: parseFloat(document.getElementById('liveFmax').value),
-    harmonic_comb: document.getElementById('liveHarmonicComb').checked,
-    drone_fundamental_hz: parseFloat(document.getElementById('liveFundamental').value),
-    normalize_audio: document.getElementById('liveNormalizeAudio').checked,
+    integration_ms: parseInt(document.getElementById('simInt').value),
+    temperature_c: parseFloat(document.getElementById('simTemp').value),
+    humidity_pct: parseFloat(document.getElementById('simHumidity').value),
+    temp_gradient_c_per_m: parseFloat(document.getElementById('simTempGrad').value),
+    moving_source: document.getElementById('simMoving').checked,
+    trajectory_type: document.getElementById('simTrajType').value,
+    speed_mps: parseFloat(document.getElementById('simSpeed').value),
+    heading_deg: parseFloat(document.getElementById('simHeading').value),
+    n_trajectory_chunks: parseInt(document.getElementById('simChunks').value),
+    crowd_model: document.getElementById('simCrowdModel').value,
+    n_plane_waves: parseInt(document.getElementById('simNPlaneWaves').value),
+    crosstalk_model: document.getElementById('simCrosstalkModel').value,
+    crosstalk_corner_hz: parseFloat(document.getElementById('simCrosstalkCorner').value),
+    ml_preview: document.getElementById('simMlPreview').checked,
+    ml_bit_depth: parseInt(document.getElementById('simMlBitDepth').value),
+    ml_feature_bit_depth: parseInt(document.getElementById('simMlFeatBitDepth').value),
+    ml_n_mels: parseInt(document.getElementById('simMlNMels').value),
+    fmin_hz: parseFloat(document.getElementById('simFmin').value),
+    fmax_hz: parseFloat(document.getElementById('simFmax').value),
+    harmonic_comb: document.getElementById('simHarmonicComb').checked,
+    drone_fundamental_hz: parseFloat(document.getElementById('simFundamental').value),
+    normalize_audio: document.getElementById('simNormalizeAudio').checked,
   };
 
   // Phase 3+: forbid an empty DOA band (fmax must exceed fmin). If the user
@@ -1542,9 +1777,9 @@ async function runLiveSimulation() {
   // gets a degenerate band that would fall back silently.
   if (params.fmax_hz <= params.fmin_hz) {
     params.fmax_hz = params.fmin_hz + 50;
-    const fmaxEl = document.getElementById('liveFmax');
+    const fmaxEl = document.getElementById('simFmax');
     fmaxEl.value = params.fmax_hz;
-    document.getElementById('liveFmaxVal').textContent = params.fmax_hz.toFixed(0);
+    document.getElementById('simFmaxVal').textContent = params.fmax_hz.toFixed(0);
   }
 
   try {
@@ -1562,10 +1797,18 @@ async function runLiveSimulation() {
       throw new Error(msg);
     }
     const data = await resp.json();
-    setCustomClipNotes(data.mic_clip_notes || []);
+    const mergedClipNotes = [...(data.mic_clip_notes || [])];
+    if (data.beam_scan && Array.isArray(data.beam_scan.clamp_notes)) {
+      mergedClipNotes.push(...data.beam_scan.clamp_notes);
+    }
+    setCustomClipNotes(mergedClipNotes);
 
     const p = getParams();
-    buildPatternMesh(data.power, p.dispRadius, p.opacity);
+    if (Array.isArray(data.power) && data.power.length) {
+      buildPatternMesh(data.power, p.dispRadius, p.opacity);
+    } else {
+      beamGroup.clear();
+    }
 
     currentMics = data.mic_positions || [];
     renderMics(currentMics, params.geometry === 'CUSTOM' ? customSelectedIdx : -1);
@@ -1605,6 +1848,7 @@ async function runLiveSimulation() {
       : '';
     elInfo.innerHTML =
       `<span class="val">${params.geometry}</span> -- ${data.mic_positions.length} mics<br>` +
+      `Beam method: <span class="val">${(data.beam_method || params.beam_method)}</span><br>` +
       `Room: ${params.room_length}x${params.room_width}x${params.room_height} m<br>` +
       `${absLine} · seed: <span class="val">${seedStr}</span><br>` +
       `Drone <span class="val">${params.drone_spl_db}</span> / Crowd <span class="val">${params.crowd_spl_db}</span> / PA <span class="val">${params.pa_spl_db}</span> / Floor <span class="val">${params.mic_noise_floor_db}</span> dB<br>` +
@@ -1632,7 +1876,15 @@ async function runLiveSimulation() {
       ((data.image_sources || []).length > 0 ? `Reflections: <span class="val">${data.image_sources.length}</span> image src<br>` : '') +
       `Computed in <span class="val">${data.elapsed_s}s</span>`;
 
-    renderHeatmapAndTopN(data);
+    const isSrp = (data.beam_method || 'srp_phat') === 'srp_phat';
+    if (isSrp) {
+      renderHeatmapAndTopN(data);
+      renderBeamPolar(null);
+    } else {
+      renderHeatmapAndTopN(null);
+      renderBeamPolar(data.beam_scan || null);
+    }
+    renderMipsReadout(data.mips || null);
 
     if (data.audio_b64) {
       audioUrls.beam = b64ToWavUrl(data.audio_b64);
@@ -1679,7 +1931,15 @@ async function runLiveSimulation() {
   }
 }
 
-document.getElementById('btnRun').addEventListener('click', runLiveSimulation);
+document.getElementById('btnRun').addEventListener('click', runOneShotSimulation);
+document.getElementById('btnLoadMiccanvas').addEventListener('click', () => {
+  document.getElementById('simGeo').value = 'CUSTOM';
+  customMicPositions = MICCANVAS_POSITIONS.map(p => [p[0], p[1], p[2]]);
+  customSelectedIdx = customMicPositions.length ? 0 : -1;
+  updateLiveLabels();
+  renderCustomList();
+  updateCustomArrayVisibility();
+});
 document.getElementById('btnCustomAdd').addEventListener('click', () => {
   customAdd(
     document.getElementById('customAddX').value,
@@ -1770,7 +2030,7 @@ const materialsReady = initMaterials();
 function setAbsorptionMode(mode) {
   const grid = document.getElementById('materialGrid');
   const btn  = document.getElementById('btnExhibitionHall');
-  const rt60Row = document.getElementById('liveRT60').parentElement;
+  const rt60Row = document.getElementById('simRT60').parentElement;
   if (mode === 'materials') {
     grid.classList.remove('hidden');
     btn.classList.remove('hidden');
@@ -1795,7 +2055,7 @@ document.getElementById('btnExhibitionHall').addEventListener('click', () => {
   // Phase 2b: realistic hall atmosphere -- warm ceiling under stage lights,
   // mild upward temperature gradient. Moving source stays off; it's a
   // what-if toggle.
-  const atm = {liveTemp: 22, liveHumidity: 55, liveTempGrad: 1.5};
+  const atm = {simTemp: 22, simHumidity: 55, simTempGrad: 1.5};
   for (const [id, v] of Object.entries(atm)) {
     const el = document.getElementById(id);
     if (el) { el.value = v; el.dispatchEvent(new Event('input')); }
@@ -1803,82 +2063,83 @@ document.getElementById('btnExhibitionHall').addEventListener('click', () => {
   // Phase 3: keep Exhibition Hall as the "known baseline" -- it applies
   // the default models (point_source crowd, simple crosstalk, no ML
   // preview) so the user can toggle Phase 3 items independently.
-  document.getElementById('liveCrowdModel').value = 'point_source';
-  document.getElementById('liveCrosstalkModel').value = 'simple';
-  document.getElementById('liveMlPreview').checked = false;
+  document.getElementById('simCrowdModel').value = 'point_source';
+  document.getElementById('simCrosstalkModel').value = 'simple';
+  document.getElementById('simMlPreview').checked = false;
   // Phase 3+: also reset DOA-band knobs so Exhibition Hall matches the
   // original Phase 1 / Phase 2 band (200-2000 Hz, flat, no comb).
-  const bandReset = {liveFmin: 200, liveFmax: 2000, liveFundamental: 200};
+  const bandReset = {simFmin: 200, simFmax: 2000, simFundamental: 200};
   for (const [id, v] of Object.entries(bandReset)) {
     const el = document.getElementById(id);
     if (el) { el.value = v; el.dispatchEvent(new Event('input')); }
   }
-  document.getElementById('liveHarmonicComb').checked = false;
-  document.getElementById('liveNormalizeAudio').checked = true;
+  document.getElementById('simHarmonicComb').checked = false;
+  document.getElementById('simNormalizeAudio').checked = true;
   syncImpairmentDetails();
 });
 
 // Impairment enable/disable of nested sliders
 function syncImpairmentDetails() {
   document.getElementById('crosstalkDetail').classList.toggle('active',
-    document.getElementById('liveCrosstalk').checked);
+    document.getElementById('simCrosstalk').checked);
   document.getElementById('quantDetail').classList.toggle('active',
-    document.getElementById('liveQuant').checked);
+    document.getElementById('simQuant').checked);
   document.getElementById('movingDetail').classList.toggle('active',
-    document.getElementById('liveMoving').checked);
+    document.getElementById('simMoving').checked);
   // Phase 3: crowd-model sub-slider shows only for plane_wave; ML preview
   // panel follows its checkbox; crosstalk corner controls only show in
   // fir_capacitive mode.
-  const crowdPlane = document.getElementById('liveCrowdModel').value === 'plane_wave';
+  const crowdPlane = document.getElementById('simCrowdModel').value === 'plane_wave';
   document.getElementById('crowdModelDetail').classList.toggle('active', crowdPlane);
   document.getElementById('mlPreviewDetail').classList.toggle('active',
-    document.getElementById('liveMlPreview').checked);
-  const firMode = document.getElementById('liveCrosstalkModel').value === 'fir_capacitive';
-  document.getElementById('liveCrosstalkCornerLabel').style.display = firMode ? 'block' : 'none';
-  document.getElementById('liveCrosstalkCorner').style.display      = firMode ? 'block' : 'none';
+    document.getElementById('simMlPreview').checked);
+  const firMode = document.getElementById('simCrosstalkModel').value === 'fir_capacitive';
+  document.getElementById('simCrosstalkCornerLabel').style.display = firMode ? 'block' : 'none';
+  document.getElementById('simCrosstalkCorner').style.display      = firMode ? 'block' : 'none';
   // Phase 3+: harmonic-comb detail (fundamental slider) only when comb is on.
   document.getElementById('harmonicCombDetail').classList.toggle('active',
-    document.getElementById('liveHarmonicComb').checked);
+    document.getElementById('simHarmonicComb').checked);
 }
-document.getElementById('liveCrosstalk').addEventListener('change', syncImpairmentDetails);
-document.getElementById('liveQuant').addEventListener('change', syncImpairmentDetails);
-document.getElementById('liveMoving').addEventListener('change', syncImpairmentDetails);
-document.getElementById('liveMlPreview').addEventListener('change', syncImpairmentDetails);
-document.getElementById('liveCrowdModel').addEventListener('change', syncImpairmentDetails);
-document.getElementById('liveCrosstalkModel').addEventListener('change', syncImpairmentDetails);
-document.getElementById('liveTrajType').addEventListener('change', updateLiveLabels);
-document.getElementById('liveCrosstalkDb').addEventListener('input', (e) => {
-  document.getElementById('liveCrosstalkDbVal').textContent = e.target.value;
+document.getElementById('simCrosstalk').addEventListener('change', syncImpairmentDetails);
+document.getElementById('simQuant').addEventListener('change', syncImpairmentDetails);
+document.getElementById('simMoving').addEventListener('change', syncImpairmentDetails);
+document.getElementById('simMlPreview').addEventListener('change', syncImpairmentDetails);
+document.getElementById('simCrowdModel').addEventListener('change', syncImpairmentDetails);
+document.getElementById('simCrosstalkModel').addEventListener('change', syncImpairmentDetails);
+document.getElementById('simTrajType').addEventListener('change', updateLiveLabels);
+document.getElementById('simCrosstalkDb').addEventListener('input', (e) => {
+  document.getElementById('simCrosstalkDbVal').textContent = e.target.value;
 });
-document.getElementById('liveCrosstalkCorner').addEventListener('input', (e) => {
-  document.getElementById('liveCrosstalkCornerVal').textContent = e.target.value;
+document.getElementById('simCrosstalkCorner').addEventListener('input', (e) => {
+  document.getElementById('simCrosstalkCornerVal').textContent = e.target.value;
 });
-document.getElementById('liveNPlaneWaves').addEventListener('input', (e) => {
-  document.getElementById('liveNPlaneWavesVal').textContent = e.target.value;
+document.getElementById('simNPlaneWaves').addEventListener('input', (e) => {
+  document.getElementById('simNPlaneWavesVal').textContent = e.target.value;
 });
-document.getElementById('liveMlNMels').addEventListener('input', (e) => {
-  document.getElementById('liveMlNMelsVal').textContent = e.target.value;
+document.getElementById('simMlNMels').addEventListener('input', (e) => {
+  document.getElementById('simMlNMelsVal').textContent = e.target.value;
 });
-document.getElementById('liveHarmonicComb').addEventListener('change', syncImpairmentDetails);
-document.getElementById('liveFmin').addEventListener('input', (e) => {
-  document.getElementById('liveFminVal').textContent = e.target.value;
+document.getElementById('simHarmonicComb').addEventListener('change', syncImpairmentDetails);
+document.getElementById('simFmin').addEventListener('input', (e) => {
+  document.getElementById('simFminVal').textContent = e.target.value;
 });
-document.getElementById('liveFmax').addEventListener('input', (e) => {
-  document.getElementById('liveFmaxVal').textContent = e.target.value;
+document.getElementById('simFmax').addEventListener('input', (e) => {
+  document.getElementById('simFmaxVal').textContent = e.target.value;
 });
-document.getElementById('liveFundamental').addEventListener('input', (e) => {
-  document.getElementById('liveFundamentalVal').textContent = e.target.value;
+document.getElementById('simFundamental').addEventListener('input', (e) => {
+  document.getElementById('simFundamentalVal').textContent = e.target.value;
 });
 syncImpairmentDetails();
 updateLiveLabels();
+updateBeamMethodUi();
 
 document.getElementById('btnHwPreset').addEventListener('click', () => {
-  document.getElementById('liveMismatch').checked  = true;
-  document.getElementById('liveCrosstalk').checked = true;
-  document.getElementById('liveCrosstalkDb').value = -40;
-  document.getElementById('liveCrosstalkDbVal').textContent = '-40';
-  document.getElementById('liveQuant').checked    = true;
-  document.getElementById('liveBitDepth').value   = '16';
+  document.getElementById('simMismatch').checked  = true;
+  document.getElementById('simCrosstalk').checked = true;
+  document.getElementById('simCrosstalkDb').value = -40;
+  document.getElementById('simCrosstalkDbVal').textContent = '-40';
+  document.getElementById('simQuant').checked    = true;
+  document.getElementById('simBitDepth').value   = '16';
   syncImpairmentDetails();
 });
 
@@ -1930,25 +2191,26 @@ function renderHeatmapAndTopN(data) {
 
 // ── Save / load / share presets ──
 const PRESET_SLIDER_IDS = [
-  'liveMicCount','liveRadius','liveSep',
-  'liveRoomL','liveRoomW','liveRoomH','liveRT60',
-  'liveSrcAz','liveSrcEl','liveSrcDist',
-  'liveDroneSPL','liveCrowdSPL','livePASPL','liveMicFloor',
-  'liveSeed','liveCrowd','livePA','liveInt','liveCrosstalkDb',
-  'liveTemp','liveHumidity','liveTempGrad',
-  'liveSpeed','liveHeading','liveChunks',
-  'liveNPlaneWaves','liveCrosstalkCorner','liveMlNMels',
-  'liveFmin','liveFmax','liveFundamental',
+  'simMicCount','simRadius','simSep',
+  'simRoomL','simRoomW','simRoomH','simRT60',
+  'simSrcAz','simSrcEl','simSrcDist',
+  'simDroneSPL','simCrowdSPL','simPASPL','simMicFloor',
+  'simSeed','simCrowd','simPA','simInt','simCrosstalkDb',
+  'simTemp','simHumidity','simTempGrad',
+  'simSpeed','simHeading','simChunks',
+  'simNPlaneWaves','simCrosstalkCorner','simMlNMels',
+  'simFmin','simFmax','simFundamental',
+  'simBeamK','simFracMax','simFracTaps','simTargetFs',
 ];
 const PRESET_SELECT_IDS = [
-  'liveGeo','liveBitDepth','liveTrajType',
+  'simGeo','simBitDepth','simTrajType','simBeamMethod',
   'matFloor','matCeiling','matEast','matWest','matSouth','matNorth',
-  'liveCrowdModel','liveCrosstalkModel',
-  'liveMlBitDepth','liveMlFeatBitDepth',
+  'simCrowdModel','simCrosstalkModel',
+  'simMlBitDepth','simMlFeatBitDepth',
 ];
 const PRESET_CHECK_IDS = [
-  'liveRandSeed','liveDiffuse','liveMismatch','liveCrosstalk','liveQuant',
-  'liveMoving','liveMlPreview','liveHarmonicComb','liveNormalizeAudio',
+  'simRandSeed','simDiffuse','simMismatch','simCrosstalk','simQuant',
+  'simMoving','simMlPreview','simHarmonicComb','simNormalizeAudio',
 ];
 
 function captureState() {
@@ -1958,18 +2220,42 @@ function captureState() {
   for (const id of PRESET_CHECK_IDS)  s.checks[id]  = document.getElementById(id).checked;
   s.absMode = document.querySelector('input[name="absMode"]:checked').value;
   s.customMicPositions = customMicPositions.map(p => [p[0], p[1], p[2]]);
+  s.simScanAngles = document.getElementById('simScanAngles').value;
   return s;
+}
+
+function _legacySimId(id) {
+  if (document.getElementById(id)) return id;
+  if (id.startsWith('sim')) return 'live' + id.slice(3);
+  return id;
 }
 
 function applyState(s) {
   if (!s) return;
+  const sliders = {...(s.sliders || {})};
   for (const [id, v] of Object.entries(s.sliders || {})) {
-    const el = document.getElementById(id);
+    if (id.startsWith('live') && !sliders['sim' + id.slice(4)]) {
+      sliders['sim' + id.slice(4)] = v;
+    }
+  }
+  for (const [id, v] of Object.entries(sliders)) {
+    const el = document.getElementById(id) || document.getElementById(_legacySimId(id));
     if (el) { el.value = v; el.dispatchEvent(new Event('input')); }
   }
+  const selects = {...(s.selects || {})};
   for (const [id, v] of Object.entries(s.selects || {})) {
-    const el = document.getElementById(id);
+    if (id.startsWith('live') && !selects['sim' + id.slice(4)]) {
+      selects['sim' + id.slice(4)] = v;
+    }
+  }
+  for (const [id, v] of Object.entries(selects)) {
+    const el = document.getElementById(id) || document.getElementById(_legacySimId(id));
     if (el) el.value = v;
+  }
+  if (typeof s.simScanAngles === 'string') {
+    document.getElementById('simScanAngles').value = s.simScanAngles;
+  } else if (typeof s.liveScanAngles === 'string') {
+    document.getElementById('simScanAngles').value = s.liveScanAngles;
   }
   for (const [id, v] of Object.entries(s.checks || {})) {
     const el = document.getElementById(id);
@@ -1992,6 +2278,7 @@ function applyState(s) {
     customSelectedIdx = -1;
   }
   syncImpairmentDetails();
+  updateBeamMethodUi();
   updateLiveLabels();
   renderCustomList();
   updateCustomArrayVisibility();
@@ -2059,6 +2346,349 @@ renderCustomList();
 updateCustomArrayVisibility();
 refresh();
 materialsReady.then(applyUrlHashPreset);
+
+// ── Realtime WebSocket + bird's-eye view ──
+const RT_WS_URL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//127.0.0.1:8766/realtime';
+let rtWs = null;
+let rtInit = null;
+let rtLastFrame = null;
+let rtPowerHistory = [];
+const RT_HISTORY_MAX = 200;
+let rtDroneXY = null;
+let rtDragging = false;
+let rtPaused = false;
+
+const elBirdsEye = document.getElementById('birdsEye');
+const elRtMetrics = document.getElementById('rtMetrics');
+const elRtGeoOverlay = document.getElementById('rtGeoOverlay');
+const elRtTimeline = document.getElementById('rtTimelineCanvas');
+const elRtStatus = document.getElementById('rtStatus');
+
+function stopOneShotExtras() {}
+
+function rtSend(obj) {
+  if (rtWs && rtWs.readyState === WebSocket.OPEN) {
+    rtWs.send(JSON.stringify(obj));
+  }
+}
+
+function stopRealtimeSession() {
+  if (rtWs) {
+    rtWs.close();
+    rtWs = null;
+  }
+  rtInit = null;
+  rtLastFrame = null;
+  rtPowerHistory = [];
+}
+
+function resizeBirdsEye() {
+  if (!elBirdsEye) return;
+  elBirdsEye.width = window.innerWidth;
+  elBirdsEye.height = Math.max(200, window.innerHeight - 90);
+  if (elRtTimeline) {
+    elRtTimeline.width = window.innerWidth;
+    elRtTimeline.height = 90;
+  }
+  if (rtInit || rtLastFrame) drawBirdsEye(rtInit, rtLastFrame);
+}
+
+function roomToCanvas(x, y, roomDim, W, H, pad = 40) {
+  const rw = roomDim[0], rh = roomDim[1];
+  const sx = (W - 2 * pad) / rw;
+  const sy = (H - 2 * pad) / rh;
+  const s = Math.min(sx, sy);
+  const ox = (W - rw * s) / 2;
+  const oy = (H - rh * s) / 2;
+  return { px: ox + x * s, py: H - (oy + y * s), s, ox, oy };
+}
+
+function drawBirdsEye(init, frame) {
+  if (!elBirdsEye || !init) return;
+  const ctx = elBirdsEye.getContext('2d');
+  const W = elBirdsEye.width, H = elBirdsEye.height;
+  ctx.fillStyle = '#020805';
+  ctx.fillRect(0, 0, W, H);
+  const room = init.room_dim;
+  const ac = init.array_center;
+  const p0 = roomToCanvas(0, 0, room, W, H);
+  const p1 = roomToCanvas(room[0], room[1], room, W, H);
+  ctx.strokeStyle = 'rgba(95,210,138,0.25)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(p0.px, p1.py, p1.px - p0.px, p0.py - p1.py);
+  const pc = roomToCanvas(ac[0], ac[1], room, W, H);
+  for (let r = 5; r <= Math.min(room[0], room[1]); r += 5) {
+    ctx.beginPath();
+    ctx.arc(pc.px, pc.py, r * pc.s, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  (init.crowd_positions || []).forEach(p => {
+    const q = roomToCanvas(p[0], p[1], room, W, H);
+    ctx.fillStyle = 'rgba(255,136,51,0.55)';
+    ctx.beginPath();
+    ctx.arc(q.px, q.py, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  (init.pa_positions || []).forEach(p => {
+    const q = roomToCanvas(p[0], p[1], room, W, H);
+    ctx.fillStyle = 'rgba(170,68,255,0.7)';
+    ctx.fillRect(q.px - 3, q.py - 3, 6, 6);
+  });
+  ctx.fillStyle = '#5fd28a';
+  ctx.beginPath();
+  ctx.arc(pc.px, pc.py, 6, 0, Math.PI * 2);
+  ctx.fill();
+  if (frame && frame.beam_scan) {
+    const scan = frame.beam_scan;
+    const powers = scan.powers_db || [];
+    const angles = scan.angles_deg || [];
+    const pMin = Math.min(...powers);
+    const pMax = Math.max(...powers);
+    const span = Math.max(pMax - pMin, 1e-6);
+    const fanR = Math.min(W, H) * 0.38;
+    const wedge = (2 * Math.PI) / Math.max(angles.length, 1);
+    angles.forEach((deg, i) => {
+      const t = (powers[i] - pMin) / span;
+      const a0 = (deg * Math.PI / 180) - wedge * 0.48;
+      const a1 = (deg * Math.PI / 180) + wedge * 0.48;
+      const isMax = i === scan.argmax_idx;
+      ctx.beginPath();
+      ctx.moveTo(pc.px, pc.py);
+      ctx.arc(pc.px, pc.py, fanR * (0.2 + 0.8 * t), a0, a1);
+      ctx.closePath();
+      ctx.fillStyle = isMax
+        ? `rgba(210,161,74,${0.35 + 0.5 * t})`
+        : `rgba(95,210,138,${0.08 + 0.25 * t})`;
+      ctx.fill();
+    });
+  }
+  const src = (frame && frame.source_pos) ? frame.source_pos : init.source_pos;
+  if (src) {
+    const ds = roomToCanvas(src[0], src[1], room, W, H);
+    if (frame) {
+      const az = frame.true_az_deg * Math.PI / 180;
+      const len = 50 + 30 * ((frame.argmax_db || 0) + 40) / 40;
+      ctx.strokeStyle = 'rgba(210,161,74,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(pc.px, pc.py);
+      const lockAz = frame.est_az_deg * Math.PI / 180;
+      ctx.lineTo(pc.px + len * Math.cos(lockAz), pc.py - len * Math.sin(lockAz));
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(68,204,68,0.85)';
+      ctx.beginPath();
+      ctx.moveTo(pc.px, pc.py);
+      ctx.lineTo(pc.px + 40 * Math.cos(az), pc.py - 40 * Math.sin(az));
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.arc(ds.px, ds.py, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#d2a14a';
+    ctx.font = '11px DM Mono, monospace';
+    ctx.fillText(`el ${(frame && frame.true_el_deg !== undefined) ? frame.true_el_deg : 0}°`, ds.px + 12, ds.py - 8);
+    rtDroneXY = { px: ds.px, py: ds.py, roomX: src[0], roomY: src[1] };
+  }
+  const geo = (frame && frame.geometry) || init.geometry || 'UCA';
+  const nm = (frame && frame.n_mics) || init.n_mics || '?';
+  elRtGeoOverlay.textContent = `${geo} · ${nm} mics`;
+}
+
+function renderRtMetrics(frame) {
+  if (!frame || !elRtMetrics) return;
+  const scan = frame.beam_scan || {};
+  const mips = frame.mips || {};
+  const lat = mips.scan_latency_s;
+  const latLine = (lat !== null && lat !== undefined && mips.method === 'steered_das')
+    ? `Scan latency: <span style="color:#5fd28a">${Number(lat).toFixed(2)} s</span><br>`
+    : (mips.method === 'beam_bank_das'
+      ? `Mux: <span style="color:#5fd28a">instant</span><br>` : '');
+  elRtMetrics.innerHTML =
+    `Method: <span style="color:#5fd28a">${frame.beam_method}</span><br>` +
+    `Lock: az=<span style="color:#5fd28a">${frame.est_az_deg}°</span> ` +
+    `(${frame.argmax_db} dB, margin ${frame.margin_db} dB)<br>` +
+    `True: az=${frame.true_az_deg}° el=${frame.true_el_deg}°<br>` +
+    latLine +
+    `MIPS: ${mips.ops_per_sample || 0} ops/sample (${(mips.budget_used_pct || 0).toFixed(1)}%)<br>` +
+    `Frame #${frame.frame_idx} · t=${frame.t_sim_s}s`;
+  renderMipsReadout(mips);
+}
+
+function renderRtTimeline() {
+  if (!elRtTimeline || rtPowerHistory.length < 2) return;
+  const ctx = elRtTimeline.getContext('2d');
+  const W = elRtTimeline.width, H = elRtTimeline.height;
+  ctx.fillStyle = '#05100a';
+  ctx.fillRect(0, 0, W, H);
+  const nK = rtPowerHistory[0].powers.length;
+  const cols = ['#3a5a44','#4a6a54','#5a7a64','#6a8a74','#7a9a84','#8aaa94','#9aba9f','#aacaaa'];
+  const tMin = rtPowerHistory[0].t;
+  const tMax = rtPowerHistory[rtPowerHistory.length - 1].t;
+  const tSpan = Math.max(tMax - tMin, 0.01);
+  rtPowerHistory.forEach((row, idx) => {
+    const x = ((row.t - tMin) / tSpan) * (W - 20) + 10;
+    row.powers.forEach((p, ki) => {
+      const y = H - 10 - (ki + 1) * (H - 20) / (nK + 1);
+      const isMax = ki === row.argmax;
+      ctx.fillStyle = isMax ? '#d2a14a' : cols[ki % cols.length];
+      ctx.fillRect(x - 1, y - 2, 3, 4);
+    });
+  });
+}
+
+function onRealtimeMessage(msg) {
+  if (msg.type === 'init') {
+    rtInit = msg;
+    if (!rtDroneXY && msg.source_pos) {
+      rtDroneXY = { roomX: msg.source_pos[0], roomY: msg.source_pos[1] };
+    }
+    drawBirdsEye(rtInit, rtLastFrame);
+    elRtStatus.textContent = 'Streaming';
+    return;
+  }
+  if (msg.type === 'regenerating_ambient') {
+    if (msg.state === 'start') {
+      elRtStatus.textContent = 'Streaming (regenerating ambient...)';
+    } else if (msg.state === 'done') {
+      elRtStatus.textContent = 'Streaming';
+    }
+    return;
+  }
+  if (msg.type === 'frame') {
+    rtLastFrame = msg;
+    renderRtMetrics(msg);
+    if (msg.beam_scan && msg.beam_scan.powers_db) {
+      rtPowerHistory.push({
+        t: msg.t_sim_s,
+        powers: msg.beam_scan.powers_db.slice(),
+        argmax: msg.beam_scan.argmax_idx,
+      });
+      if (rtPowerHistory.length > RT_HISTORY_MAX) rtPowerHistory.shift();
+      renderRtTimeline();
+    }
+    drawBirdsEye(rtInit, rtLastFrame);
+  }
+}
+
+function startRealtimeSession() {
+  stopRealtimeSession();
+  resizeBirdsEye();
+  elRtStatus.textContent = 'Connecting...';
+  rtWs = new WebSocket(RT_WS_URL);
+  rtWs.onopen = () => {
+    elRtStatus.textContent = 'Connected';
+    rtSend({ type: 'resume' });
+    pushRealtimeSettings();
+  };
+  rtWs.onmessage = (ev) => {
+    try { onRealtimeMessage(JSON.parse(ev.data)); }
+    catch (e) { console.warn('rt parse', e); }
+  };
+  rtWs.onclose = () => {
+    if (mode === 'realtime') elRtStatus.textContent = 'Disconnected (is sim_server.py running?)';
+  };
+  rtWs.onerror = () => {
+    elRtStatus.textContent = 'WebSocket error';
+  };
+}
+
+function pushRealtimeSettings() {
+  const k = parseInt(document.getElementById('rtBeamK').value);
+  rtSend({ type: 'set_method', beam_method: document.getElementById('rtBeamMethod').value });
+  rtSend({ type: 'set_beam_bank', k });
+  rtSend({ type: 'set_integration_ms', integration_ms: parseInt(document.getElementById('rtInt').value) });
+  rtSend({
+    type: 'set_crowd',
+    diffuse: document.getElementById('rtDiffuse').checked,
+    crowd_count: parseInt(document.getElementById('rtCrowd').value),
+  });
+  const geo = document.getElementById('rtGeo').value;
+  const payload = {
+    type: 'set_geometry',
+    geometry: geo,
+    mic_count: parseInt(document.getElementById('simMicCount')?.value || 12),
+    radius: parseFloat(document.getElementById('simRadius')?.value || 0.15),
+    ring_separation: parseFloat(document.getElementById('simSep')?.value || 0.12),
+  };
+  if (geo === 'CUSTOM') {
+    payload.custom_mic_positions = customMicPositions.map(p => [p[0], p[1], p[2]]);
+  }
+  rtSend(payload);
+  if (rtDroneXY) {
+    rtSend({
+      type: 'set_drone',
+      pos: [rtDroneXY.roomX, rtDroneXY.roomY],
+      el_deg: parseFloat(document.getElementById('rtEl').value),
+    });
+  }
+}
+
+function canvasToRoom(px, py, roomDim, W, H) {
+  const rw = roomDim[0], rh = roomDim[1];
+  const pad = 40;
+  const sx = (W - 2 * pad) / rw;
+  const sy = (H - 2 * pad) / rh;
+  const s = Math.min(sx, sy);
+  const ox = (W - rw * s) / 2;
+  const oy = (H - rh * s) / 2;
+  const x = (px - ox) / s;
+  const y = (H - py - oy) / s;
+  return [x, y];
+}
+
+elBirdsEye.addEventListener('mousedown', (ev) => {
+  if (!rtInit || mode !== 'realtime') return;
+  const rect = elBirdsEye.getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  if (rtDroneXY && Math.hypot(mx - rtDroneXY.px, my - rtDroneXY.py) < 18) rtDragging = true;
+});
+window.addEventListener('mousemove', (ev) => {
+  if (!rtDragging || !rtInit) return;
+  const rect = elBirdsEye.getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  const W = elBirdsEye.width, H = elBirdsEye.height;
+  const [rx, ry] = canvasToRoom(mx, my, rtInit.room_dim, W, H);
+  rtDroneXY = { roomX: rx, roomY: ry };
+  rtSend({
+    type: 'set_drone',
+    pos: [rx, ry],
+    el_deg: parseFloat(document.getElementById('rtEl').value),
+  });
+  drawBirdsEye(rtInit, rtLastFrame);
+});
+window.addEventListener('mouseup', () => { rtDragging = false; });
+
+document.getElementById('btnRtPause').addEventListener('click', () => {
+  rtPaused = !rtPaused;
+  document.getElementById('btnRtPause').textContent = rtPaused ? 'Resume' : 'Pause';
+  rtSend({ type: rtPaused ? 'pause' : 'resume' });
+});
+
+['rtBeamK','rtInt','rtEl','rtCrowd'].forEach(id => {
+  document.getElementById(id).addEventListener('input', (e) => {
+    const valId = id + 'Val';
+    const vel = document.getElementById(valId);
+    if (vel) vel.textContent = e.target.value;
+    if (mode === 'realtime') pushRealtimeSettings();
+  });
+});
+document.getElementById('rtBeamMethod').addEventListener('change', () => {
+  if (mode === 'realtime') pushRealtimeSettings();
+});
+document.getElementById('rtDiffuse').addEventListener('change', () => {
+  if (mode === 'realtime') pushRealtimeSettings();
+});
+document.getElementById('rtGeo').addEventListener('change', () => {
+  if (mode === 'realtime') pushRealtimeSettings();
+});
+document.getElementById('btnRtMiccanvas').addEventListener('click', () => {
+  document.getElementById('rtGeo').value = 'CUSTOM';
+  customMicPositions = MICCANVAS_POSITIONS.map(p => [p[0], p[1], p[2]]);
+  if (mode === 'realtime') pushRealtimeSettings();
+});
+
+window.addEventListener('resize', resizeBirdsEye);
 
 // ── Animate ──
 function animate() {

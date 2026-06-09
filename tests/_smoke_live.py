@@ -19,6 +19,8 @@ Checks:
       substantially smaller freq_bins set without wrecking DOA accuracy.
   (m) Phase 3++ CUSTOM geometry: centre-relative mic coordinates run over
       HTTP and return the expected mic count plus clipping diagnostics.
+  (n) Hardware-faithful beamforming modes: steered DAS scan-lock and
+      beam-bank DAS over MICCANVAS, including FracDelay clamp warnings.
 
 Run manually (server must be on 127.0.0.1:8766):
   python tests/_smoke_live.py
@@ -377,6 +379,67 @@ def main() -> int:
     if az_err > 5 or el_err > 10:
         print(f"    FAIL: CUSTOM cylinder DOA drifted too far: "
               f"az_err={az_err:.1f} el_err={el_err:.1f}")
+        ok = False
+
+    print("[n] Hardware-faithful beamforming modes (MICCANVAS) ...")
+    miccanvas = [
+        [0.000, 0.000, 0.000],
+        [0.010, 0.000, 0.000], [0.005, 0.008660254, 0.000], [-0.005, 0.008660254, 0.000],
+        [-0.010, 0.000, 0.000], [-0.005, -0.008660254, 0.000], [0.005, -0.008660254, 0.000],
+        [0.018477591, 0.007653669, 0.000], [0.007653669, 0.018477591, 0.000],
+        [-0.007653669, 0.018477591, 0.000], [-0.018477591, 0.007653669, 0.000],
+        [-0.018477591, -0.007653669, 0.000], [-0.007653669, -0.018477591, 0.000],
+        [0.007653669, -0.018477591, 0.000], [0.018477591, -0.007653669, 0.000],
+    ]
+
+    body_m1 = base_payload()
+    body_m1["geometry"] = "CUSTOM"
+    body_m1["custom_mic_positions"] = miccanvas
+    body_m1["beam_method"] = "steered_das"
+    body_m1["beam_bank_angles_deg"] = [0, 45, 90, 135, 180, 225, 270, 315]
+    body_m1["source_az_deg"] = 62.0
+    body_m1["source_el_deg"] = 0.0
+    body_m1["diffuse"] = False
+    r_m1 = post("/simulate", body_m1)
+    bs1 = r_m1.get("beam_scan") or {}
+    err1 = abs((r_m1["est_az_deg"] - body_m1["source_az_deg"]) % 360)
+    err1 = min(err1, 360 - err1)
+    print(f"    Mode1 est az={r_m1['est_az_deg']} err={err1:.1f} "
+          f"angles={len(bs1.get('angles_deg') or [])}")
+    if len(bs1.get("angles_deg") or []) != 8:
+        print("    FAIL: Mode1 should report 8 scan angles")
+        ok = False
+    if err1 > 22.6:
+        print("    FAIL: Mode1 exceeded one 45-deg sector")
+        ok = False
+    if (bs1.get("clamp_notes") or []):
+        print("    FAIL: MICCANVAS should not trigger FracDelay clamp in Mode1")
+        ok = False
+
+    body_m2 = dict(body_m1)
+    body_m2["beam_method"] = "beam_bank_das"
+    body_m2["beam_bank_angles_deg"] = [0, 45, 90, 135, 180, 225, 270, 315]
+    r_m2 = post("/simulate", body_m2)
+    bs2 = r_m2.get("beam_scan") or {}
+    err2 = abs((r_m2["est_az_deg"] - body_m2["source_az_deg"]) % 360)
+    err2 = min(err2, 360 - err2)
+    print(f"    Mode2 est az={r_m2['est_az_deg']} err={err2:.1f} "
+          f"angles={len(bs2.get('angles_deg') or [])}")
+    if err2 > 22.6:
+        print("    FAIL: Mode2 exceeded one 45-deg sector")
+        ok = False
+
+    body_clamp = dict(body_m2)
+    body_clamp["custom_mic_positions"] = [
+        [0.0, 0.0, 0.0], [0.655, 0.0, 0.0], [-0.655, 0.0, 0.0], [0.0, 0.655, 0.0]
+    ]
+    body_clamp["beam_bank_angles_deg"] = [0, 90, 180, 270]
+    body_clamp["frac_delay_max_samples"] = 8
+    r_clamp = post("/simulate", body_clamp)
+    clamp_notes = (r_clamp.get("beam_scan") or {}).get("clamp_notes") or []
+    print(f"    clamp notes count = {len(clamp_notes)}")
+    if len(clamp_notes) == 0:
+        print("    FAIL: oversized array should trigger FracDelay clamp warnings")
         ok = False
 
     if ok:
