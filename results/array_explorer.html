@@ -4,9 +4,10 @@
 <meta charset="UTF-8">
 <title>Array Beam Pattern Explorer</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Outfit:wght@300;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=DM+Mono:wght@400;500&family=Outfit:wght@300;500;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#0a0a0f;color:#e0e0e0;font-family:'Outfit',sans-serif;overflow:hidden}
+body{background:#0a0a0f;color:#e0e0e0;font-family:'Share Tech Mono',monospace;overflow:hidden;background-image:radial-gradient(rgba(0,80,180,0.12) 1px,transparent 1px);background-size:16px 16px}
+*{font-family:'Share Tech Mono',monospace!important}
 #canvas3d{width:100vw;height:100vh;display:block}
 .panel{
   position:fixed;z-index:10;
@@ -143,7 +144,44 @@ body.realtime-mode #info,
 body.realtime-mode #rirWrap,
 body.realtime-mode #audioWrap,
 body.realtime-mode #btnRun{display:none!important}
+body.hardware-mode #legend,
+body.hardware-mode #info,
+body.hardware-mode #rirWrap,
+body.hardware-mode #audioWrap{display:none!important}
 body.realtime-mode #canvas3d{display:none!important}
+body.hardware-3d-active #canvas3d{display:block!important;position:fixed!important;top:0;z-index:2}
+body.hardware-split #canvas3d{width:calc(50vw - 145px)!important;left:calc(50vw + 145px)!important}
+body.hardware-3d-only #canvas3d{width:100vw!important;left:0!important}
+body.hardware-3d-only #hardwareWrap{display:none!important}
+#hardwareWrap{position:fixed;inset:0;z-index:1;background:#0a0a0f;background-image:radial-gradient(rgba(0,80,180,0.15) 1px,transparent 1px);background-size:16px 16px}
+#hardwareWrap.hidden{display:none}
+body.hardware-split #hardwareWrap{left:290px;width:calc(50vw - 145px)}
+/* Scanline CRT overlay */
+.hw-scanlines{position:absolute;inset:0;bottom:140px;z-index:3;pointer-events:none;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.12) 2px,rgba(0,0,0,0.12) 4px);background-size:100% 100%;animation:scanScroll 4s linear infinite}
+.hw-scanlines.hidden{display:none}
+@keyframes scanScroll{from{background-position:0 0}to{background-position:0 100px}}
+/* Vignette */
+.hw-vignette{position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.5) 100%);z-index:3}
+/* Header bar */
+#hwHeaderBar{position:fixed;top:0;left:290px;right:0;height:24px;background:rgba(10,6,4,0.95);border-bottom:1px solid rgba(217,75,0,0.3);font-size:11px;color:#b89878;display:flex;align-items:center;padding:0 12px;gap:16px;z-index:50}
+#hwHeaderBar.hidden{display:none}
+#hwHeaderBar .hb-status{color:#ffffff}
+#hwHeaderBar .hb-sep{color:rgba(217,75,0,0.3)}
+/* Sonar sweep */
+#hwSonar{width:18px;height:18px}
+#hwSonar.hidden{display:none}
+/* Panel bezels */
+body.hardware-mode #controls{border:2px solid rgba(217,75,0,0.3);box-shadow:inset 0 0 0 1px #1a0a04,0 0 12px rgba(217,75,0,0.1)}
+body.hardware-mode #controls img[alt="ADI"]{filter:brightness(10) grayscale(1) !important}
+body.hardware-mode h2{color:#ffcc66}
+body.hardware-mode .val{color:#ffcc66}
+body.hardware-mode .toggle-btn.active{background:#3a2010;color:#ffcc66;border-color:#d94b00}
+body.hardware-mode input[type=range]::-webkit-slider-thumb{background:#ffcc66}
+body.hardware-mode .ctrl-row select:focus{outline:1px solid #d94b00}
+body.hardware-mode .check-row input[type=checkbox]{accent-color:#ffcc66}
+body.hardware-mode .ctrl-row label{color:#b89878}
+body.hardware-mode .mat-preset-btn{background:#1a1008;color:#ffcc66;border-color:rgba(217,75,0,0.4)}
+body.hardware-mode .mat-preset-btn:hover{background:#2a1a0c}
 #realtimeWrap{position:fixed;inset:0;z-index:1;background:#020805}
 #realtimeWrap.hidden{display:none}
 #birdsEye{display:block;width:100%;height:calc(100% - 90px);cursor:crosshair}
@@ -152,12 +190,13 @@ body.realtime-mode #canvas3d{display:none!important}
 #rtTimelineCanvas{display:block;width:100%;height:100%}
 #rtGeoOverlay{position:fixed;right:14px;bottom:100px;font-family:'DM Mono',monospace;font-size:10px;color:#82a89a;background:rgba(5,16,10,0.85);border:1px solid #2a4a36;padding:6px 10px;z-index:5}
 .rt-status{margin-top:8px;font-size:10px;color:#82a89a}
+body.hardware-mode .rt-status{color:#b89878}
 </style>
 </head>
 <body>
 
 <div id="controls" class="panel">
-  <h2>ADI Scandinavia - Acoustic Beamformer</h2>
+  <h2 style="display:flex;align-items:center;gap:8px;"><img src="ADI_BIG-0c8e21e5.png" alt="ADI" style="height:18px;filter:brightness(2.0);">Acoustic Visualiser</h2>
 
   <div class="preset-toolbar" id="presetToolbar">
     <div class="preset-btn" id="btnPresetSave">Save</div>
@@ -168,9 +207,10 @@ body.realtime-mode #canvas3d{display:none!important}
 
   <div class="toggle-row" role="tablist">
     <div class="toggle-btn active" id="btnBeam" role="tab" tabindex="0">Beam Pattern</div>
-    <div class="toggle-btn" id="btnSRP" role="tab" tabindex="0">SRP Sim</div>
+    <div class="toggle-btn" id="btnSRP" role="tab" tabindex="0" style="display:none">SRP Sim</div>
     <div class="toggle-btn" id="btnSimulator" role="tab" tabindex="0">Simulator</div>
     <div class="toggle-btn" id="btnRealtime" role="tab" tabindex="0">Realtime</div>
+    <div class="toggle-btn" id="btnHardware" role="tab" tabindex="0">Hardware</div>
   </div>
 
   <!-- Beam pattern controls -->
@@ -208,7 +248,7 @@ body.realtime-mode #canvas3d{display:none!important}
     </div>
     <div class="ctrl-row">
       <label>Frequency: <span id="freqVal">500</span> Hz</label>
-      <input type="range" id="freq" min="50" max="10000" step="50" value="500">
+      <input type="range" id="freq" min="50" max="20000" step="50" value="500">
     </div>
   </div>
 
@@ -557,6 +597,54 @@ body.realtime-mode #canvas3d{display:none!important}
     <div id="rtStatus" class="rt-status">Connecting...</div>
   </div>
 
+  <div id="hardwareControls" class="hidden">
+    <div id="hwStatus" class="rt-status">Checking hardware...</div>
+    <div class="ctrl-row">
+      <label>Averaging: <span id="hwAvgVal">4</span> scans</label>
+      <input type="range" id="hwAvg" min="1" max="16" step="1" value="4">
+    </div>
+    <div class="ctrl-row">
+      <label>dB Floor: <span id="hwDbFloorVal">-40</span> dB</label>
+      <input type="range" id="hwDbFloor" min="-60" max="-10" step="5" value="-40">
+    </div>
+    <div class="ctrl-row">
+      <label>View</label>
+      <select id="hwViewMode">
+        <option value="2d">2D Polar</option>
+        <option value="3d">3D Visualiser</option>
+        <option value="split" selected>Split (2D + 3D)</option>
+      </select>
+    </div>
+    <div class="ctrl-row">
+      <label>3D Shape</label>
+      <select id="hw3dShape">
+        <option value="torus" selected>Torus</option>
+        <option value="sphere">Sphere</option>
+        <option value="particles">Particles</option>
+        <option value="bars">Bar Chart</option>
+      </select>
+    </div>
+    <hr style="border-color:#333;margin:8px 0">
+    <div class="check-row">
+      <input type="checkbox" id="hwCrtToggle" checked>
+      <label>CRT Scanlines</label>
+    </div>
+    <div style="color:#888;font-size:10px;margin-bottom:4px">Ground Truth (optional)</div>
+    <div class="ctrl-row">
+      <label>True Az: <span id="hwTrueAzVal">—</span></label>
+      <input type="range" id="hwTrueAz" min="0" max="355" step="5" value="0" disabled>
+    </div>
+    <div class="ctrl-row">
+      <label>True El: <span id="hwTrueElVal">—</span></label>
+      <input type="range" id="hwTrueEl" min="-30" max="60" step="5" value="0" disabled>
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="hwTrueEnable">
+      <label>Show true direction</label>
+    </div>
+    <button type="button" id="btnHwPause" class="mat-preset-btn">Pause</button>
+  </div>
+
   <hr class="sep">
   <div class="ctrl-row">
     <label>Display Radius: <span id="dispRadVal">2.0</span> m</label>
@@ -632,6 +720,28 @@ body.realtime-mode #canvas3d{display:none!important}
   <div id="rtMetrics"></div>
   <div id="rtGeoOverlay">—</div>
   <div id="rtTimeline"><canvas id="rtTimelineCanvas"></canvas></div>
+</div>
+
+<div id="hardwareWrap" class="hidden">
+  <div class="hw-scanlines hidden" id="hwScanlines"></div>
+  <div class="hw-vignette"></div>
+  <canvas id="hwBirdsEye" style="display:block;width:100%;height:calc(100% - 140px);cursor:crosshair;padding:20px;"></canvas>
+  <div id="hwMetricsWrap" style="position:fixed;bottom:155px;left:12px;display:flex;align-items:flex-start;gap:1px;z-index:50;">
+    <div id="hwMetrics" style="background:rgba(10,6,4,0.92);padding:10px 14px;border-radius:0;border:2px solid rgba(217,75,0,0.3);box-shadow:inset 0 0 0 1px #1a0a04;font-size:12px;color:#ffffff;line-height:1.7;min-width:220px;"></div>
+    <canvas id="hwSonar" width="18" height="18" style="margin-top:1px;margin-left:1px;"></canvas>
+  </div>
+  <div id="hwStatsLine" style="position:absolute;bottom:120px;left:0;right:0;height:18px;background:rgba(10,6,4,0.9);border-top:1px solid rgba(217,75,0,0.3);font-size:11px;color:#b89878;padding:2px 10px;z-index:4;"></div>
+  <div id="hwTimeline" style="position:absolute;bottom:0;left:0;right:0;height:120px;"><canvas id="hwTimelineCanvas" style="display:block;width:100%;height:100%;"></canvas></div>
+</div>
+
+<div id="hwHeaderBar" class="hidden">
+  <span>UTC: <span id="hbTime">--:--:--</span></span>
+  <span class="hb-sep">|</span>
+  <span>ARRAY: MICCANVAS-15</span>
+  <span class="hb-sep">|</span>
+  <span>PORT: <span id="hbPort">--</span></span>
+  <span class="hb-sep">|</span>
+  <span class="hb-status">STATUS: <span id="hbStatus">IDLE</span></span>
 </div>
 
 <script type="importmap">
@@ -1021,9 +1131,13 @@ function renderRIR(rirData) {
   ctx.fillText(ms + ' ms', W - 32, H - 4);
 }
 
-const colorLow = new THREE.Color(0x0a1628);
-const colorMid = new THREE.Color(0x1a6baa);
-const colorHigh = new THREE.Color(0xff3344);
+const colorLow  = new THREE.Color(0x050505); // Pure matte black (Deep ocean background)
+const colorMid  = new THREE.Color(0xd94b00); // Industrial amber/orange (Strong target tracking)
+const colorHigh = new THREE.Color(0xffffff); // Blinding pure white (Maximum energy saturation)
+
+
+
+
 
 function buildPatternMesh(power, dispRadius, opacity) {
   beamGroup.clear();
@@ -1074,11 +1188,12 @@ function buildPatternMesh(power, dispRadius, opacity) {
 
   const mat = new THREE.MeshPhongMaterial({
     vertexColors: true, transparent: true, opacity,
-    side: THREE.DoubleSide, shininess: 30,
+    side: THREE.DoubleSide, shininess: 60,
+    emissive: colorLow, emissiveIntensity: 0.6,
   });
   beamGroup.add(new THREE.Mesh(geometry, mat));
 
-  const wireMat = new THREE.MeshBasicMaterial({wireframe: true, color: 0xffffff, transparent: true, opacity: opacity*0.08});
+  const wireMat = new THREE.MeshBasicMaterial({wireframe: true, color: 0xffffff, transparent: true, opacity: opacity*0.15});
   beamGroup.add(new THREE.Mesh(geometry.clone(), wireMat));
 }
 
@@ -1549,18 +1664,32 @@ function refresh() {
 // ── Mode toggle ──
 function setMode(m) {
   mode = m;
-  ['btnBeam','btnSRP','btnSimulator','btnRealtime'].forEach(id => {
+  ['btnBeam','btnSRP','btnSimulator','btnRealtime','btnHardware'].forEach(id => {
     document.getElementById(id).classList.remove('active');
   });
-  ['beamControls','srpControls','simControls','realtimeControls'].forEach(id => {
+  ['beamControls','srpControls','simControls','realtimeControls','hardwareControls'].forEach(id => {
     document.getElementById(id).classList.add('hidden');
   });
   document.getElementById('btnRun').classList.toggle('hidden', m !== 'sim');
   document.body.classList.toggle('realtime-mode', m === 'realtime');
+  document.body.classList.toggle('hardware-mode', m === 'hardware');
+  document.body.classList.remove('hardware-3d-active', 'hardware-split', 'hardware-3d-only');
   document.getElementById('realtimeWrap').classList.toggle('hidden', m !== 'realtime');
+  document.getElementById('hardwareWrap').classList.toggle('hidden', m !== 'hardware');
+  if (m === 'hardware') {
+    const vmode = document.getElementById('hwViewMode').value;
+    if (vmode === '3d') {
+      document.body.classList.add('hardware-3d-active', 'hardware-3d-only');
+    } else if (vmode === 'split') {
+      document.body.classList.add('hardware-3d-active', 'hardware-split');
+    }
+    document.getElementById('hwBirdsEye').style.display = (vmode === '3d') ? 'none' : 'block';
+  }
 
   if (m === 'realtime') stopOneShotExtras();
   else stopRealtimeSession();
+
+  if (m !== 'hardware') stopHardwareSession();
 
   if (m === 'beam') {
     document.getElementById('btnBeam').classList.add('active');
@@ -1578,6 +1707,10 @@ function setMode(m) {
     document.getElementById('btnRealtime').classList.add('active');
     document.getElementById('realtimeControls').classList.remove('hidden');
     startRealtimeSession();
+  } else if (m === 'hardware') {
+    document.getElementById('btnHardware').classList.add('active');
+    document.getElementById('hardwareControls').classList.remove('hidden');
+    startHardwareSession();
   }
   updateCustomArrayVisibility();
   renderCustomList();
@@ -1586,6 +1719,7 @@ document.getElementById('btnBeam').addEventListener('click', () => setMode('beam
 document.getElementById('btnSRP').addEventListener('click', () => setMode('srp'));
 document.getElementById('btnSimulator').addEventListener('click', () => setMode('sim'));
 document.getElementById('btnRealtime').addEventListener('click', () => setMode('realtime'));
+document.getElementById('btnHardware').addEventListener('click', () => setMode('hardware'));
 
 // ── Live sim label updaters ──
 const simSliders = {
@@ -2693,6 +2827,40 @@ window.addEventListener('resize', resizeBirdsEye);
 // ── Animate ──
 function animate() {
   requestAnimationFrame(animate);
+
+  // ── Hardware interpolation: lerp display toward target at 60 FPS ──
+  if (mode === 'hardware' && hwTargetPowers && hwDisplayPowers && hwLastFrame) {
+    let moved = false;
+    for (let i = 0; i < hwDisplayPowers.length; i++) {
+      const diff = hwTargetPowers[i] - hwDisplayPowers[i];
+      if (Math.abs(diff) > 0.01) {
+        hwDisplayPowers[i] += diff * HW_LERP_SPEED;
+        moved = true;
+      } else {
+        hwDisplayPowers[i] = hwTargetPowers[i];
+      }
+    }
+    if (moved || hwNeedsRedraw) {
+      hwNeedsRedraw = false;
+      const interpFrame = {
+        ...hwLastFrame,
+        beam_scan: {
+          ...hwLastFrame.beam_scan,
+          powers_db: hwDisplayPowers,
+          angles_deg: hwAngles,
+        },
+      };
+      drawHwBirdsEye(interpFrame);
+      updateHw3dRing(interpFrame);
+    }
+    // Sonar: lerp toward target angle (one full rev per scan)
+    const sonarDiff = hwSonarTargetAngle - hwSonarAngle;
+    hwSonarAngle += sonarDiff * 0.08;
+    renderHwSonar();
+    // Update jet particles
+    updateJetParticles();
+  }
+
   controls.update();
   renderer.render(scene, camera);
 }
@@ -2703,6 +2871,1026 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// ── Hardware Mode ─────────────────────────────────────────────────────────────
+
+const HW_WS_URL = 'ws://127.0.0.1:8766/realtime_hw';
+let hwWs = null;
+let hwInit = null;
+let hwLastFrame = null;
+let hwPowerHistory = [];
+const HW_HISTORY_MAX = 500;
+let hwPaused = false;
+
+// -- Interpolation state for 60 FPS smooth animation --
+let hwTargetPowers = null;   // Latest scan from hardware (raw dB)
+let hwDisplayPowers = null;  // Currently displayed values (lerped toward target)
+let hwAngles = null;         // Angle array from init
+const HW_LERP_SPEED = 0.02; // Blend factor per frame (0.12 @ 60fps ≈ 120ms settle)
+let hwNeedsRedraw = false;
+let hwSonarTargetAngle = 0;
+let hwAfterglowHistory = []; // stores last 5 interpVals arrays for phosphor decay
+
+// -- 3D ring mesh for hardware mode --
+const hwRingGroup = new THREE.Group();
+scene.add(hwRingGroup);
+let hw3dActive = false;
+
+// -- Jet particle system (plasma ejections) --
+let hwJetParticles = []; // {x,y,z, vx,vy,vz, life, maxLife, r,g,b}
+const HW_JET_MAX = 300;
+let hwJetPoints = null;
+let hwJetGeo = null;
+
+function spawnJetParticles(peakAzRad, power01, dispRadius) {
+  const count = Math.floor(3 + 8 * power01);
+  for (let i = 0; i < count && hwJetParticles.length < HW_JET_MAX; i++) {
+    const spread = (Math.random() - 0.5) * 0.3;
+    const az = peakAzRad + spread;
+    const speed = dispRadius * (0.008 + 0.015 * power01 * Math.random());
+    const ySpeed = (Math.random() - 0.5) * speed * 0.2;
+    // Start from outer edge of particle cloud
+    const startR = dispRadius * (0.75 + 0.15 * Math.random());
+    hwJetParticles.push({
+      x: startR * Math.cos(az), y: ySpeed * 3, z: startR * Math.sin(az),
+      vx: speed * Math.cos(az), vy: ySpeed, vz: speed * Math.sin(az),
+      life: 1.0, maxLife: 0.2 + Math.random() * 0.2,
+      r: 1.0, g: 0.4 + 0.3 * Math.random(), b: 0.0,
+    });
+  }
+}
+
+function updateJetParticles() {
+  if (hwJetParticles.length === 0 && !hwJetPoints) return;
+  const dt = 1 / 60;
+  // Update existing
+  for (let i = hwJetParticles.length - 1; i >= 0; i--) {
+    const p = hwJetParticles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.z += p.vz;
+    p.vx *= 0.96; p.vy *= 0.96; p.vz *= 0.96; // drag
+    p.life -= dt / p.maxLife;
+    if (p.life <= 0) { hwJetParticles.splice(i, 1); }
+  }
+  // Rebuild geometry
+  if (hwJetPoints) { hwRingGroup.remove(hwJetPoints); hwJetPoints = null; }
+  if (hwJetParticles.length === 0) return;
+  const pos = [], cols = [];
+  for (const p of hwJetParticles) {
+    pos.push(p.x, p.y, p.z);
+    cols.push(p.r * p.life, p.g * p.life, p.b * p.life);
+  }
+  hwJetGeo = new THREE.BufferGeometry();
+  hwJetGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  hwJetGeo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+  const mat = new THREE.PointsMaterial({size: 0.06, vertexColors: true, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true});
+  hwJetPoints = new THREE.Points(hwJetGeo, mat);
+  hwRingGroup.add(hwJetPoints);
+}
+
+function stopHardwareSession() {
+  if (hwWs) { hwWs.close(); hwWs = null; }
+  hwInit = null;
+  hwLastFrame = null;
+  hwPowerHistory = [];
+  hwTargetPowers = null;
+  hwDisplayPowers = null;
+  hwAngles = null;
+  hwNeedsRedraw = false;
+  hwRingGroup.clear();
+  hwArrayMarkerGroup.visible = false;
+  hw3dActive = false;
+  document.body.classList.remove('hardware-3d-active', 'hardware-split', 'hardware-3d-only');
+  // Hide hardware UI elements
+  document.getElementById('hwScanlines').classList.add('hidden');
+  document.getElementById('hwHeaderBar').classList.add('hidden');
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  beamGroup.visible = true;
+  sourceGroup.visible = true;
+  roomGroup.visible = true;
+}
+
+function hwSend(obj) {
+  if (hwWs && hwWs.readyState === WebSocket.OPEN) hwWs.send(JSON.stringify(obj));
+}
+
+function startHardwareSession() {
+  stopHardwareSession();
+  resizeHwCanvas();
+  // Show hardware UI elements
+  document.getElementById('hwScanlines').classList.remove('hidden');
+  document.getElementById('hwHeaderBar').classList.remove('hidden');
+  const statusEl = document.getElementById('hwStatus');
+  statusEl.textContent = 'Connecting...';
+
+  hwWs = new WebSocket(HW_WS_URL);
+  hwWs.onopen = () => {
+    statusEl.textContent = 'Connected';
+    hwSend({ type: 'resume' });
+    // Push current settings
+    const avg = parseInt(document.getElementById('hwAvg').value);
+    hwSend({ type: 'set_avg', avg });
+  };
+  hwWs.onmessage = (ev) => {
+    try { onHardwareMessage(JSON.parse(ev.data)); }
+    catch (e) { console.warn('hw parse', e); }
+  };
+  hwWs.onclose = () => {
+    if (mode === 'hardware') statusEl.textContent = 'Disconnected (is sim_server.py running with --serial-port?)';
+  };
+  hwWs.onerror = () => {
+    statusEl.textContent = 'WebSocket error — no serial port?';
+  };
+}
+
+function onHardwareMessage(msg) {
+  if (msg.type === 'init') {
+    hwInit = msg;
+    document.getElementById('hwStatus').textContent =
+      `Connected · ${msg.port || '?'} · ${msg.num_angles} angles × ${msg.angle_step}°`;
+    return;
+  }
+  if (msg.type === 'frame') {
+    hwLastFrame = msg;
+    renderHwMetrics(msg);
+    if (msg.beam_scan && msg.beam_scan.powers_db) {
+      // Set interpolation target (don't render directly)
+      hwTargetPowers = msg.beam_scan.powers_db.slice();
+      hwAngles = msg.beam_scan.angles_deg;
+      if (!hwDisplayPowers || hwDisplayPowers.length !== hwTargetPowers.length) {
+        hwDisplayPowers = hwTargetPowers.slice(); // First frame: snap
+      }
+      hwNeedsRedraw = true;
+
+      // Advance sonar target: full revolution per scan
+      hwSonarTargetAngle += 2 * Math.PI;
+      updateHwHeader(msg);
+
+      hwPowerHistory.push({
+        t: msg.t_sim_s,
+        powers: msg.beam_scan.powers_db.slice(),
+        argmax: msg.beam_scan.argmax_idx,
+      });
+      if (hwPowerHistory.length > HW_HISTORY_MAX) hwPowerHistory.shift();
+      renderHwTimeline();
+    }
+  }
+}
+
+function resizeHwCanvas() {
+  const canvas2d = document.getElementById('hwBirdsEye');
+  if (canvas2d) {
+    const dpr = window.devicePixelRatio || 1;
+    canvas2d.width = canvas2d.clientWidth * dpr;
+    canvas2d.height = canvas2d.clientHeight * dpr;
+  }
+}
+
+// -- 2D polar curve renderer (smooth closed polygon, like beam_scan_gui.py) --
+function drawHwBirdsEye(frame) {
+  const canvas = document.getElementById('hwBirdsEye');
+  if (!canvas || canvas.style.display === 'none') return;
+  // Resize canvas to match CSS size
+  const dpr = window.devicePixelRatio || 1;
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
+    canvas.width = cw * dpr;
+    canvas.height = ch * dpr;
+  }
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#040810';
+  ctx.fillRect(0, 0, W, H);
+
+  // Draw dot grid on canvas
+  ctx.fillStyle = 'rgba(217,75,0,0.08)';
+  for (let gx = 0; gx < W; gx += 16) {
+    for (let gy = 0; gy < H; gy += 16) {
+      ctx.fillRect(gx, gy, 1, 1);
+    }
+  }
+
+  const cx = W / 2, cy = H / 2;
+  const maxR = Math.min(W, H) * 0.42;
+
+  const scan = frame.beam_scan;
+  if (!scan || !scan.powers_db) return;
+
+  const powers = scan.powers_db;
+  const angles = scan.angles_deg;
+  const N = angles.length;
+  const dbFloor = parseFloat(document.getElementById('hwDbFloor').value) || -40;
+
+  // Normalize to [0, 1] using relative peak-to-min range (like beam_scan_gui.py)
+  const pMax = Math.max(...powers);
+  const pMin = Math.min(...powers);
+  const pRange = Math.max(pMax - pMin, 0.1);  // avoid div-by-zero
+  const vals = powers.map(p => Math.max(0, Math.min(1, (p - pMin) / pRange)));
+
+  // Draw concentric rings with dB labels
+  ctx.strokeStyle = 'rgba(217,75,0,0.3)';
+  ctx.lineWidth = 1;
+  ctx.shadowColor = 'rgba(217,75,0,0.4)';
+  ctx.shadowBlur = 0;
+  const dbLabels = ['-10', '-20', '-30', '-40'];
+  for (let i = 0; i < 4; i++) {
+    const r = (i + 1) * 0.25;
+    ctx.beginPath();
+    ctx.arc(cx, cy, maxR * r, 0, Math.PI * 2);
+    ctx.stroke();
+    // dB label
+    ctx.fillStyle = 'rgba(255,180,100,0.7)';
+    ctx.font = '11px Share Tech Mono, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(dbLabels[3 - i] + ' dB', cx + maxR * r + 4, cy - 4);
+  }
+
+  // Noise floor dashed circle
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = 'rgba(255,100,0,0.5)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, maxR * 0.15, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.shadowBlur = 0;
+
+  // Draw radial lines every 30 deg
+  ctx.strokeStyle = 'rgba(217,75,0,0.3)';
+  ctx.shadowColor = 'rgba(217,75,0,0.3)';
+  ctx.shadowBlur = 8;
+  for (let a = 0; a < 360; a += 30) {
+    const ar = a * Math.PI / 180;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + maxR * 1.05 * Math.cos(ar), cy - maxR * 1.05 * Math.sin(ar));
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+
+  // Draw angle labels with CRT glow
+  ctx.fillStyle = 'rgba(255,200,140,0.95)';
+  ctx.shadowColor = 'rgba(217,75,0,0.6)';
+  ctx.shadowBlur = 10;
+  ctx.font = `${Math.max(12, Math.round(W/60))}px Share Tech Mono, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let a = 0; a < 360; a += 30) {
+    const ar = a * Math.PI / 180;
+    ctx.fillText(`${a}°`, cx + maxR * 1.12 * Math.cos(ar), cy - maxR * 1.12 * Math.sin(ar));
+  }
+  ctx.shadowBlur = 0;
+
+  // Interpolate 4x for smoothness (same as beam_scan_gui.py)
+  const interpFactor = 4;
+  const Ni = N * interpFactor;
+  const valsWrapped = [...vals, vals[0]];
+  const anglesWrapped = [...angles.map(a => a * Math.PI / 180), 2 * Math.PI];
+  const interpAngles = [];
+  const interpVals = [];
+  for (let i = 0; i < Ni; i++) {
+    const a = (i / Ni) * 2 * Math.PI;
+    interpAngles.push(a);
+    // Linear interpolation in the wrapped array
+    let idx = 0;
+    for (let j = 0; j < anglesWrapped.length - 1; j++) {
+      if (a >= anglesWrapped[j] && a <= anglesWrapped[j+1]) { idx = j; break; }
+    }
+    const t = (anglesWrapped[idx+1] - anglesWrapped[idx]) > 1e-9
+      ? (a - anglesWrapped[idx]) / (anglesWrapped[idx+1] - anglesWrapped[idx])
+      : 0;
+    interpVals.push(valsWrapped[idx] * (1 - t) + valsWrapped[idx + 1] * t);
+  }
+
+  // Draw afterglow trail (phosphor decay - older scans)
+  for (let hi = 0; hi < hwAfterglowHistory.length; hi++) {
+    const age = hwAfterglowHistory.length - hi;
+    const opacity = 0.5 / age;
+    const oldVals = hwAfterglowHistory[hi];
+    ctx.beginPath();
+    for (let i = 0; i <= Ni; i++) {
+      const idx2 = i % Ni;
+      const a2 = interpAngles[idx2];
+      const r2 = maxR * (0.15 + 0.85 * oldVals[idx2]);
+      const x2 = cx + r2 * Math.cos(a2);
+      const y2 = cy - r2 * Math.sin(a2);
+      if (i === 0) ctx.moveTo(x2, y2); else ctx.lineTo(x2, y2);
+    }
+    ctx.closePath();
+    ctx.shadowColor = `rgba(217,75,0,${opacity * 0.6})`;
+    ctx.shadowBlur = 6 + age * 2;
+    ctx.strokeStyle = `rgba(217,75,0,${opacity})`;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = `rgba(217,75,0,${opacity * 0.1})`;
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+
+  // Draw filled polar curve (current scan) with color gradient
+  // First: filled shape as dim base
+  ctx.beginPath();
+  for (let i = 0; i <= Ni; i++) {
+    const idx = i % Ni;
+    const a = interpAngles[idx];
+    const r = maxR * (0.15 + 0.85 * interpVals[idx]);
+    const x = cx + r * Math.cos(a);
+    const y = cy - r * Math.sin(a);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(217,75,0,0.08)';
+  ctx.fill();
+
+  // Per-segment gradient stroke (colorLow→colorMid→colorHigh mapped to val)
+  function hw2dColor(val, alpha) {
+    let r, g, b;
+    if (val < 0.5) {
+      const t = val * 2;
+      r = Math.round(5 + (217 - 5) * t);
+      g = Math.round(5 + (75 - 5) * t);
+      b = Math.round(5 + (0 - 5) * t);
+    } else {
+      const t = (val - 0.5) * 2;
+      r = Math.round(217 + (255 - 217) * t);
+      g = Math.round(75 + (255 - 75) * t);
+      b = Math.round(0 + (255 - 0) * t);
+    }
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  ctx.lineWidth = 2.5;
+  for (let i = 0; i < Ni; i++) {
+    const idx0 = i, idx1 = (i + 1) % Ni;
+    const a0 = interpAngles[idx0], a1 = interpAngles[idx1];
+    const v0 = interpVals[idx0], v1 = interpVals[idx1];
+    const r0 = maxR * (0.15 + 0.85 * v0), r1 = maxR * (0.15 + 0.85 * v1);
+    const x0 = cx + r0 * Math.cos(a0), y0 = cy - r0 * Math.sin(a0);
+    const x1 = cx + r1 * Math.cos(a1), y1 = cy - r1 * Math.sin(a1);
+    const vMid = (v0 + v1) * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.strokeStyle = hw2dColor(vMid, 0.9);
+    ctx.shadowColor = hw2dColor(vMid, 0.5);
+    ctx.shadowBlur = 6;
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+
+  // Store current interpolated vals for afterglow
+  hwAfterglowHistory.push(interpVals.slice());
+  if (hwAfterglowHistory.length > 5) hwAfterglowHistory.shift();
+
+  // Draw peak dot
+  const peakIdx = scan.argmax_idx;
+  const peakAngle = angles[peakIdx] * Math.PI / 180;
+  const peakR = maxR * (0.15 + 0.85 * vals[peakIdx]);
+  const peakX = cx + peakR * Math.cos(peakAngle);
+  const peakY = cy - peakR * Math.sin(peakAngle);
+  ctx.fillStyle = '#ff6600';
+  ctx.beginPath();
+  ctx.arc(peakX, peakY, 7, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Draw peak direction line from center
+  ctx.strokeStyle = 'rgba(255,102,0,0.8)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + maxR * 1.1 * Math.cos(peakAngle), cy - maxR * 1.1 * Math.sin(peakAngle));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Draw true direction if set
+  if (frame.true_az_deg != null) {
+    const trueRad = frame.true_az_deg * Math.PI / 180;
+    ctx.strokeStyle = 'rgba(68,204,68,0.8)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + maxR * 0.85 * Math.cos(trueRad), cy - maxR * 0.85 * Math.sin(trueRad));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  ctx.shadowBlur = 0;
+
+  // Corner crosshairs / reticle marks
+  const reticleLen = 20;
+  const reticleInset = 30;
+  ctx.strokeStyle = 'rgba(217,75,0,0.4)';
+  ctx.lineWidth = 1.5;
+  // Top-left
+  ctx.beginPath();
+  ctx.moveTo(reticleInset, reticleInset + reticleLen); ctx.lineTo(reticleInset, reticleInset); ctx.lineTo(reticleInset + reticleLen, reticleInset);
+  ctx.stroke();
+  // Top-right
+  ctx.beginPath();
+  ctx.moveTo(W - reticleInset - reticleLen, reticleInset); ctx.lineTo(W - reticleInset, reticleInset); ctx.lineTo(W - reticleInset, reticleInset + reticleLen);
+  ctx.stroke();
+  // Bottom-left
+  ctx.beginPath();
+  ctx.moveTo(reticleInset, H - reticleInset - reticleLen); ctx.lineTo(reticleInset, H - reticleInset); ctx.lineTo(reticleInset + reticleLen, H - reticleInset);
+  ctx.stroke();
+  // Bottom-right
+  ctx.beginPath();
+  ctx.moveTo(W - reticleInset - reticleLen, H - reticleInset); ctx.lineTo(W - reticleInset, H - reticleInset); ctx.lineTo(W - reticleInset, H - reticleInset - reticleLen);
+  ctx.stroke();
+}
+
+// -- Metrics panel --
+function computeHwEngMetrics(powers, angles, peakIdx) {
+  const N = powers.length;
+  const peak = powers[peakIdx];
+  const mean = powers.reduce((a, b) => a + b, 0) / N;
+
+  // Directivity Index: 10*log10(peak_linear / mean_linear) ≈ peak_dB - mean_dB for relative
+  const DI = (peak - mean).toFixed(1);
+
+  // -3 dB beamwidth: count contiguous angles within 3 dB of peak
+  let bwCount = 0;
+  for (let off = 0; off < N; off++) {
+    if (powers[(peakIdx + off) % N] >= peak - 3) bwCount++;
+    else break;
+  }
+  for (let off = 1; off < N; off++) {
+    if (powers[(peakIdx - off + N) % N] >= peak - 3) bwCount++;
+    else break;
+  }
+  const step = 360 / N;
+  const bw3db = Math.round(bwCount * step);
+
+  // Sidelobe level: find highest local max that's > 1 beamwidth away from peak
+  const minSep = Math.max(3, Math.ceil(bwCount * 1.5)); // min separation from peak
+  let sll = -Infinity;
+  for (let i = 0; i < N; i++) {
+    const dist = Math.min(Math.abs(i - peakIdx), N - Math.abs(i - peakIdx));
+    if (dist < minSep) continue;
+    if (powers[i] > sll) sll = powers[i];
+  }
+  const sllRel = sll > -Infinity ? (sll - peak).toFixed(1) : '—';
+
+  // Front-to-back ratio: peak vs. 180° opposite
+  const backIdx = (peakIdx + Math.round(N / 2)) % N;
+  const fbr = (peak - powers[backIdx]).toFixed(1);
+
+  return { DI, bw3db, sllRel, fbr };
+}
+
+function renderHwMetrics(frame) {
+  const el = document.getElementById('hwMetrics');
+  if (!el) return;
+  const az = String(frame.est_az_deg).padStart(3, '\u00a0');
+  const db = String(frame.argmax_db).padStart(6, '\u00a0');
+  const margin = String(frame.margin_db).padStart(5, '\u00a0');
+  const rate = String(frame.scan_rate_hz).padStart(4, '\u00a0');
+  const fnum = String(frame.frame_idx).padStart(5, '\u00a0');
+  const t = String(frame.t_sim_s).padStart(7, '\u00a0');
+
+  // Engineering metrics from beam scan
+  let engLine = '';
+  if (frame.beam_scan && frame.beam_scan.powers_db) {
+    const m = computeHwEngMetrics(frame.beam_scan.powers_db, frame.beam_scan.angles_deg, frame.beam_scan.argmax_idx);
+    engLine =
+      `<br><span style="color:#998070">──────────────────────</span><br>` +
+      `BW<sub>-3dB</sub>: <span style="color:#ffcc66">${m.bw3db}°</span> · ` +
+      `DI: <span style="color:#ffcc66">${m.DI} dB</span><br>` +
+      `SLL: <span style="color:#b89878">${m.sllRel} dB</span> · ` +
+      `F/B: <span style="color:#b89878">${m.fbr} dB</span>`;
+  }
+
+  el.innerHTML =
+    `<span style="color:#d94b00;font-weight:600">HARDWARE BEAM SCAN</span><br>` +
+    `Lock: <span style="color:#ff8833">${az}°</span> ` +
+    `(${db} dB, Δ${margin} dB)<br>` +
+    `Scan rate: <span style="color:#ffcc66">${rate} Hz</span><br>` +
+    `Frame #${fnum} · t=${t}s` + engLine;
+}
+
+// -- Timeline strip --
+function renderHwTimeline() {
+  const canvas = document.getElementById('hwTimelineCanvas');
+  if (!canvas || hwPowerHistory.length < 2) return;
+  if (canvas.width !== canvas.clientWidth) canvas.width = canvas.clientWidth;
+  if (canvas.height !== canvas.clientHeight) canvas.height = canvas.clientHeight;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#0a0604';
+  ctx.fillRect(0, 0, W, H);
+
+  // Horizontal waterfall: X = angle (0-360), Y = time (newest at top, scrolls down)
+  const nHistory = Math.min(hwPowerHistory.length, H);
+  const angleAxisH = 12; // reserved for top labels
+
+  for (let hi = 0; hi < nHistory; hi++) {
+    const row = hwPowerHistory[hwPowerHistory.length - 1 - hi];
+    const y = angleAxisH + hi;
+    const nAngles = row.powers.length;
+    const pMax = Math.max(...row.powers);
+    const pMin = Math.min(...row.powers);
+    const pRange = Math.max(pMax - pMin, 0.1);
+
+    for (let ai = 0; ai < nAngles; ai++) {
+      const val = Math.max(0, Math.min(1, (row.powers[ai] - pMin) / pRange));
+      const x = (ai / nAngles) * W;
+      const colW = Math.ceil(W / nAngles);
+
+      let r, g, b;
+      if (val < 0.5) {
+        const t = val * 2;
+        r = Math.floor(5 + t * 212);
+        g = Math.floor(5 + t * 70);
+        b = Math.floor(5 + t * -5);
+      } else {
+        const t = (val - 0.5) * 2;
+        r = Math.floor(217 + t * 38);
+        g = Math.floor(75 + t * 180);
+        b = Math.floor(0 + t * 255);
+      }
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(x, y, colW, 1);
+    }
+  }
+
+  // Angle axis labels (top)
+  ctx.fillStyle = 'rgba(255,180,100,0.8)';
+  ctx.font = '9px Share Tech Mono, monospace';
+  ctx.textAlign = 'center';
+  for (let a = 0; a <= 360; a += 90) {
+    const x = (a / 360) * W;
+    ctx.fillText(a + '°', x, 9);
+  }
+
+  // Update stats line
+  const last = hwPowerHistory[hwPowerHistory.length - 1];
+  if (last) {
+    const powers = last.powers;
+    const peak = Math.max(...powers);
+    const mean = powers.reduce((a, b) => a + b, 0) / powers.length;
+    const snr = (peak - mean).toFixed(1);
+    const peakIdx = powers.indexOf(peak);
+    const nAngles = powers.length;
+    // Estimate -3dB beamwidth
+    const halfPower = peak - 3;
+    let bwCount = 0;
+    for (let i = 0; i < nAngles; i++) {
+      if (powers[i] >= halfPower) bwCount++;
+    }
+    const bw3db = Math.round(bwCount * (360 / nAngles));
+    // Angular rate (degrees per second between last two frames)
+    let rate = 0;
+    if (hwPowerHistory.length >= 2) {
+      const prev = hwPowerHistory[hwPowerHistory.length - 2];
+      const prevPeakIdx = prev.powers.indexOf(Math.max(...prev.powers));
+      const dt = last.t - prev.t;
+      if (dt > 0) {
+        let dAngle = (peakIdx - prevPeakIdx) * (360 / nAngles);
+        if (dAngle > 180) dAngle -= 360;
+        if (dAngle < -180) dAngle += 360;
+        rate = (dAngle / dt).toFixed(0);
+      }
+    }
+    const statsEl = document.getElementById('hwStatsLine');
+    if (statsEl) {
+      statsEl.innerHTML = `<span style="color:#ff6600">PEAK: ${Math.round(peakIdx * 360 / nAngles)}°</span> | ` +
+        `<span style="color:#ffcc66">PWR: ${peak.toFixed(1)} dB</span> | ` +
+        `SNR: ${snr} dB | BW₃dB: ${bw3db}° | ` +
+        `<span style="color:#ffaa44">Δ: ${rate > 0 ? '+' : ''}${rate}°/s</span>`;
+    }
+  }
+}
+
+// -- Sonar sweep indicator --
+let hwSonarAngle = 0;
+function renderHwSonar() {
+  const canvas = document.getElementById('hwSonar');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2, r = 4.5;
+  const angle = hwSonarAngle % (2 * Math.PI);
+  ctx.clearRect(0, 0, W, H);
+  // Ring
+  ctx.strokeStyle = 'rgba(217,75,0,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.stroke();
+  // Sweep line
+  ctx.strokeStyle = '#ffaa44';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + r * Math.cos(angle), cy + r * Math.sin(angle));
+  ctx.stroke();
+  // Glow dot at tip
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(cx + r * Math.cos(hwSonarAngle), cy + r * Math.sin(hwSonarAngle), 2.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// -- Header bar time update --
+function updateHwHeader(frame) {
+  const timeEl = document.getElementById('hbTime');
+  const portEl = document.getElementById('hbPort');
+  const statusEl = document.getElementById('hbStatus');
+  if (timeEl) timeEl.textContent = new Date().toISOString().slice(11, 19) + 'Z';
+  if (portEl && hwInit) portEl.textContent = hwInit.port || 'COM?';
+  if (statusEl) statusEl.textContent = frame ? 'TRACKING' : 'IDLE';
+}
+
+// -- 3D beam pattern mesh (torus or sphere, selectable) --
+function buildHardwareRingMesh(powers_db, angles_deg, dispRadius, opacity) {
+  hwRingGroup.clear();
+  if (!powers_db || !angles_deg || angles_deg.length === 0) return;
+
+  const N = angles_deg.length;
+  const shape = document.getElementById('hw3dShape').value;
+
+  // ── Spatial smoothing: 5-tap circular moving average ──
+  const smoothed = new Array(N);
+  const K = 2;
+  for (let i = 0; i < N; i++) {
+    let sum = 0;
+    for (let k = -K; k <= K; k++) sum += powers_db[(i + k + N) % N];
+    smoothed[i] = sum / (2 * K + 1);
+  }
+
+  // ── Dynamic range gating ──
+  const pMax = Math.max(...smoothed);
+  const pMin = Math.min(...smoothed);
+  const pRange = pMax - pMin;
+  const gateThreshold = 3.0;
+  const compression = Math.min(1.0, Math.max(0.0, (pRange - 0.5) / gateThreshold));
+  const effectiveRange = Math.max(pRange, 0.1);
+  const valsRaw = smoothed.map(p => {
+    const raw = (p - pMin) / effectiveRange;
+    return raw * compression + 0.5 * (1 - compression);
+  });
+
+  // 4x azimuth upsampling for smooth geometry (72 -> 288 vertices)
+  const UPSAMPLE = 4;
+  const M = N * UPSAMPLE;
+  const vals = new Array(M);
+  const interpAngles = new Array(M);
+  for (let i = 0; i < M; i++) {
+    const t = i / M;
+    const srcF = t * N;
+    const srcI = Math.floor(srcF) % N;
+    const srcJ = (srcI + 1) % N;
+    const frac = srcF - Math.floor(srcF);
+    vals[i] = Math.pow(valsRaw[srcI] * (1 - frac) + valsRaw[srcJ] * frac, 1.0);
+    interpAngles[i] = t * 2 * Math.PI;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  const vertices = [];
+  const colors = [];
+  const indices = [];
+
+  if (shape === 'torus') {
+    // ── Torus: inner ring fixed, only outer side expands with power ──
+    const nTube = 16;
+    const R_major = dispRadius * 0.4;
+    const r_fixed = dispRadius * 0.1; // small fixed inner tube radius
+
+    for (let ti = 0; ti <= nTube; ti++) {
+      const theta = (ti / nTube) * 2 * Math.PI;
+      const cosT = Math.cos(theta), sinT = Math.sin(theta);
+      // Expansion factor: 0 on inner side (cosT=-1), full on outer side (cosT=+1)
+      const expand = Math.max(0, (cosT + 1) * 0.5); // 0..1
+
+      for (let ai = 0; ai <= M; ai++) {
+        const aIdx = ai % M;
+        const phi = interpAngles[aIdx];
+        const val = vals[aIdx];
+        // Inner ring: r_fixed. Outer ring: r_fixed + power-driven expansion
+        const r_tube = r_fixed + expand * dispRadius * 0.3 * val;
+
+        const x = (R_major + r_tube * cosT) * Math.cos(phi);
+        const z = (R_major + r_tube * cosT) * Math.sin(phi);
+        const y = r_tube * sinT;
+        vertices.push(x, y, z);
+
+        const c = new THREE.Color();
+        if (val < 0.5) c.copy(colorLow).lerp(colorMid, val * 2);
+        else c.copy(colorMid).lerp(colorHigh, (val - 0.5) * 2);
+        colors.push(c.r, c.g, c.b);
+      }
+    }
+
+    const rowLen = M + 1;
+    for (let ti = 0; ti < nTube; ti++) {
+      for (let ai = 0; ai < M; ai++) {
+        const a = ti * rowLen + ai;
+        const b = a + 1;
+        const c = (ti + 1) * rowLen + ai;
+        const d = c + 1;
+        indices.push(a, c, b);
+        indices.push(b, c, d);
+      }
+    }
+  } else if (shape === 'sphere') {
+    // ── Sphere: radius modulated by azimuthal power, uniform across latitude ──
+    // Keeps a solid minimum radius so it never collapses. Equator bulges at peak.
+    const nLat = 24;  // latitude segments (pole to pole)
+    const nLon = M;   // longitude = azimuth resolution
+    const rMin = dispRadius * 0.25; // minimum sphere radius
+    const rMod = dispRadius * 0.35; // max expansion at equator
+
+    for (let lat = 0; lat <= nLat; lat++) {
+      const theta = (lat / nLat) * Math.PI; // 0=north pole, PI=south pole
+      const sinT = Math.sin(theta), cosT = Math.cos(theta);
+      // Latitude fade: full modulation at equator (sinT=1), none at poles (sinT=0)
+      const latFade = Math.pow(sinT, 1.5);
+
+      for (let lon = 0; lon <= nLon; lon++) {
+        const lonIdx = lon % nLon;
+        const phi = interpAngles[lonIdx];
+        const val = vals[lonIdx];
+        const r = rMin + rMod * val * latFade;
+
+        const x = r * sinT * Math.cos(phi);
+        const z = r * sinT * Math.sin(phi);
+        const y = r * cosT;
+        vertices.push(x, y, z);
+
+        // Color: blend by power value, with slight desaturation near poles
+        const cv = val * (0.3 + 0.7 * latFade);
+        const c = new THREE.Color();
+        if (cv < 0.5) c.copy(colorLow).lerp(colorMid, cv * 2);
+        else c.copy(colorMid).lerp(colorHigh, (cv - 0.5) * 2);
+        colors.push(c.r, c.g, c.b);
+      }
+    }
+
+    const rowLen = nLon + 1;
+    for (let lat = 0; lat < nLat; lat++) {
+      for (let lon = 0; lon < nLon; lon++) {
+        const a = lat * rowLen + lon;
+        const b = a + 1;
+        const c = (lat + 1) * rowLen + lon;
+        const d = c + 1;
+        indices.push(a, c, b);
+        indices.push(b, c, d);
+      }
+    }
+  } else if (shape === 'particles') {
+    // ── Particle cloud: scatter points radially, density/distance encodes power ──
+    const nParticlesPerAngle = 40;
+    const positions = [];
+    const particleColors = [];
+
+    for (let ai = 0; ai < M; ai++) {
+      const phi = interpAngles[ai];
+      const val = vals[ai];
+      const innerR = dispRadius * 0.28; // larger inner ring
+      const outerR = dispRadius * (0.4 + 0.45 * val); // slightly smaller outer
+      const count = Math.floor(nParticlesPerAngle * (0.2 + 0.8 * val));
+
+      for (let p = 0; p < count; p++) {
+        const r = innerR + (outerR - innerR) * Math.pow(Math.random(), 0.6);
+        const ySpread = (Math.random() - 0.5) * dispRadius * 0.2;
+        const x = r * Math.cos(phi);
+        const z = r * Math.sin(phi);
+        positions.push(x, ySpread, z);
+
+        const cv = val * (0.7 + 0.3 * Math.random());
+        const c = new THREE.Color();
+        if (cv < 0.5) c.copy(colorLow).lerp(colorMid, cv * 2);
+        else c.copy(colorMid).lerp(colorHigh, (cv - 0.5) * 2);
+        particleColors.push(c.r, c.g, c.b);
+      }
+    }
+
+    // Spawn jet particles at peak direction
+    const peakIdx = vals.indexOf(Math.max(...vals));
+    const peakAz = interpAngles[peakIdx];
+    const peakVal = vals[peakIdx];
+    if (peakVal > 0.6) {
+      spawnJetParticles(peakAz, peakVal, dispRadius);
+    }
+
+    const pGeo = new THREE.BufferGeometry();
+    pGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    pGeo.setAttribute('color', new THREE.Float32BufferAttribute(particleColors, 3));
+    const pMat = new THREE.PointsMaterial({
+      size: 0.05,
+      vertexColors: true,
+      transparent: true,
+      opacity: opacity * 0.8,
+      sizeAttenuation: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    hwRingGroup.add(new THREE.Points(pGeo, pMat));
+    return; // particles don't need mesh/wireframe below
+  } else if (shape === 'bars') {
+    // ── Cylindrical bar chart: vertical bars in a circle ──
+    const barWidth = 0.04;
+    const barDepth = 0.07;
+    const ringR = dispRadius * 0.5;
+    // Use single shared geometry + instanced approach: every 4th upsampled angle = 72 bars
+    const step = 4;
+
+    for (let ai = 0; ai < M; ai += step) {
+      const phi = interpAngles[ai];
+      const val = vals[ai];
+      const barH = dispRadius * (0.1 + 0.8 * val);
+
+      const barGeo = new THREE.BoxGeometry(barWidth, barH, barDepth);
+      const c = new THREE.Color();
+      if (val < 0.5) c.copy(colorLow).lerp(colorMid, val * 2);
+      else c.copy(colorMid).lerp(colorHigh, (val - 0.5) * 2);
+      const barMat = new THREE.MeshPhongMaterial({color: c, transparent: true, opacity: opacity * 0.9, shininess: 40, emissive: c, emissiveIntensity: 0.15});
+      const bar = new THREE.Mesh(barGeo, barMat);
+
+      bar.position.set(ringR * Math.cos(phi), barH / 2, ringR * Math.sin(phi));
+      bar.rotation.y = -phi;
+      hwRingGroup.add(bar);
+    }
+    // Add reference ring at the base
+    const ringGeo = new THREE.RingGeometry(ringR - 0.02, ringR + 0.02, 72);
+    const ringMat = new THREE.MeshBasicMaterial({color: 0x5fd28a, transparent: true, opacity: 0.3, side: THREE.DoubleSide});
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.rotation.x = -Math.PI / 2;
+    hwRingGroup.add(ringMesh);
+    return;
+  }
+
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
+  const mat = new THREE.MeshPhongMaterial({
+    vertexColors: true, transparent: true, opacity,
+    side: THREE.DoubleSide, shininess: 60,
+    emissive: colorLow, emissiveIntensity: 0.6,
+  });
+  hwRingGroup.add(new THREE.Mesh(geometry, mat));
+
+  const wireMat = new THREE.MeshBasicMaterial({
+    wireframe: true, color: 0xffffff, transparent: true, opacity: opacity * 0.12
+  });
+  hwRingGroup.add(new THREE.Mesh(geometry.clone(), wireMat));
+}
+
+// -- Hardware 3D array marker (small disc at origin) --
+const hwArrayMarkerGroup = new THREE.Group();
+scene.add(hwArrayMarkerGroup);
+
+function ensureHwArrayMarker() {
+  if (hwArrayMarkerGroup.children.length > 0) return;
+  // Small disc to represent the array at origin
+  const discGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.015, 24);
+  const discMat = new THREE.MeshPhongMaterial({color: 0x5fd28a, emissive: 0x112211, transparent: true, opacity: 0.8});
+  const disc = new THREE.Mesh(discGeo, discMat);
+  hwArrayMarkerGroup.add(disc);
+  // Small upward pin
+  const pinGeo = new THREE.CylinderGeometry(0.01, 0.01, 0.15, 8);
+  const pinMat = new THREE.MeshPhongMaterial({color: 0x5fd28a, emissive: 0x112211});
+  const pin = new THREE.Mesh(pinGeo, pinMat);
+  pin.position.y = 0.08;
+  hwArrayMarkerGroup.add(pin);
+}
+
+function updateHw3dRing(frame) {
+  const viewMode = document.getElementById('hwViewMode').value;
+  if (viewMode === '2d') {
+    hwRingGroup.visible = false;
+    hwArrayMarkerGroup.visible = false;
+    hw3dActive = false;
+    return;
+  }
+  hwRingGroup.visible = true;
+  hwArrayMarkerGroup.visible = true;
+  hw3dActive = true;
+  ensureHwArrayMarker();
+
+  // Hide other mode groups that might be showing
+  beamGroup.visible = false;
+  sourceGroup.visible = false;
+  roomGroup.visible = false;
+
+  const scan = frame.beam_scan;
+  if (!scan || !scan.powers_db) return;
+
+  const dispRadius = parseFloat(document.getElementById('dispRadius')?.value || 2.0);
+  const opacity = parseFloat(document.getElementById('opacity')?.value || 0.7);
+
+  buildHardwareRingMesh(scan.powers_db, scan.angles_deg, dispRadius, opacity);
+
+  // Update DOA arrows
+  const estAzRad = frame.est_az_deg * Math.PI / 180;
+  renderSteerDir(estAzRad, 0, dispRadius * 1.3);
+
+  if (frame.true_az_deg != null) {
+    const trueAzRad = frame.true_az_deg * Math.PI / 180;
+    renderTrueDir(trueAzRad, 0, dispRadius * 1.1);
+  } else {
+    trueDirGroup.clear();
+  }
+}
+
+// -- Hardware controls event handlers --
+document.getElementById('hwAvg').addEventListener('input', (e) => {
+  document.getElementById('hwAvgVal').textContent = e.target.value;
+  hwSend({ type: 'set_avg', avg: parseInt(e.target.value) });
+});
+
+document.getElementById('hwDbFloor').addEventListener('input', (e) => {
+  document.getElementById('hwDbFloorVal').textContent = e.target.value;
+});
+
+document.getElementById('hwCrtToggle').addEventListener('change', (e) => {
+  const el = document.getElementById('hwScanlines');
+  if (e.target.checked) el.classList.remove('hidden');
+  else el.classList.add('hidden');
+});
+
+document.getElementById('hwViewMode').addEventListener('change', () => {
+  const vmode = document.getElementById('hwViewMode').value;
+  const canvas2d = document.getElementById('hwBirdsEye');
+  document.body.classList.remove('hardware-3d-active', 'hardware-split', 'hardware-3d-only');
+  if (vmode === '2d') {
+    canvas2d.style.display = 'block';
+    hwRingGroup.visible = false;
+  } else if (vmode === '3d') {
+    canvas2d.style.display = 'none';
+    document.body.classList.add('hardware-3d-active', 'hardware-3d-only');
+    hwRingGroup.visible = true;
+  } else { // split
+    canvas2d.style.display = 'block';
+    document.body.classList.add('hardware-3d-active', 'hardware-split');
+    hwRingGroup.visible = true;
+  }
+  // Resize Three.js renderer to new viewport
+  setTimeout(() => {
+    const c3 = document.getElementById('canvas3d');
+    if (c3.offsetWidth > 0) {
+      camera.aspect = c3.clientWidth / c3.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(c3.clientWidth, c3.clientHeight);
+    }
+  }, 50);
+});
+
+document.getElementById('hwTrueEnable').addEventListener('change', (e) => {
+  const enabled = e.target.checked;
+  document.getElementById('hwTrueAz').disabled = !enabled;
+  document.getElementById('hwTrueEl').disabled = !enabled;
+  if (enabled) {
+    const az = parseFloat(document.getElementById('hwTrueAz').value);
+    const el = parseFloat(document.getElementById('hwTrueEl').value);
+    document.getElementById('hwTrueAzVal').textContent = az + '°';
+    document.getElementById('hwTrueElVal').textContent = el + '°';
+    hwSend({ type: 'set_true_dir', az_deg: az, el_deg: el });
+  } else {
+    document.getElementById('hwTrueAzVal').textContent = '\u2014';
+    document.getElementById('hwTrueElVal').textContent = '\u2014';
+    hwSend({ type: 'set_true_dir', az_deg: null, el_deg: null });
+  }
+});
+
+document.getElementById('hwTrueAz').addEventListener('input', (e) => {
+  if (!document.getElementById('hwTrueEnable').checked) return;
+  document.getElementById('hwTrueAzVal').textContent = e.target.value + '°';
+  hwSend({ type: 'set_true_dir', az_deg: parseFloat(e.target.value), el_deg: parseFloat(document.getElementById('hwTrueEl').value) });
+});
+
+document.getElementById('hwTrueEl').addEventListener('input', (e) => {
+  if (!document.getElementById('hwTrueEnable').checked) return;
+  document.getElementById('hwTrueElVal').textContent = e.target.value + '°';
+  hwSend({ type: 'set_true_dir', az_deg: parseFloat(document.getElementById('hwTrueAz').value), el_deg: parseFloat(e.target.value) });
+});
+
+document.getElementById('btnHwPause').addEventListener('click', () => {
+  hwPaused = !hwPaused;
+  document.getElementById('btnHwPause').textContent = hwPaused ? 'Resume' : 'Pause';
+  hwSend({ type: hwPaused ? 'pause' : 'resume' });
+});
+
+// Check hardware availability on load and auto-show tab if available
+fetch('http://127.0.0.1:8766/hw_status')
+  .then(r => r.json())
+  .then(data => {
+    if (data.available) {
+      document.getElementById('btnHardware').style.display = '';
+    } else {
+      // Still show the button but dimmed
+      document.getElementById('btnHardware').style.opacity = '0.4';
+    }
+  })
+  .catch(() => {
+    document.getElementById('btnHardware').style.opacity = '0.4';
+  });
+
 </script>
 </body>
 </html>
