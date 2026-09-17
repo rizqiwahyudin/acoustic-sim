@@ -1,0 +1,42 @@
+{
+  "name": "acoustic-visualiser",
+  "version": "1.0.0",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron": "npm run build && electron .",
+    "package": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.adi.acoustic-visualiser",
+    "productName": "Acoustic Visualiser",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "server/sim_server.exe",
+        "to": "server/sim_server.exe"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "ADI_BIG-0c8e21e5.png"
+    }
+  },
+  "devDependencies": {
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.2",
+    "vite": "^6.0.0"
+  },
+  "dependencies": {
+    "three": "^0.184.0"
+  }
+}

@@ -2471,7 +2471,13 @@ function applyUrlHashPreset() {
 [elSelGeo, elMicCount, elRadius, elSep, elSteerAz, elSteerEl, elFreq, elDispRadius, elOpacity].forEach(el => {
   el.addEventListener('input', refresh);
 });
-elSelGeo.addEventListener('change', refresh);
+elSelGeo.addEventListener('change', () => {
+  if (elSelGeo.value === 'CUSTOM' && customMicPositions.length === 0) {
+    customSeedFromPreset();
+    return;
+  }
+  refresh();
+});
 srpGeoSel.addEventListener('change', refresh);
 srpCondSel.addEventListener('change', refresh);
 

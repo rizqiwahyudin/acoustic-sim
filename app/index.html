@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Array Beam Pattern Explorer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="controls" class="panel">
+  <h2 style="display:flex;align-items:center;gap:8px;"><img src="ADI_BIG-0c8e21e5.png" alt="ADI" style="height:18px;filter:brightness(2.0);">Acoustic Visualiser</h2>
+
+  <div class="preset-toolbar" id="presetToolbar">
+    <div class="preset-btn" id="btnPresetSave">Save</div>
+    <div class="preset-btn" id="btnPresetLoad">Load</div>
+    <div class="preset-btn" id="btnPresetShare">Copy URL</div>
+    <input type="file" id="presetFile" accept="application/json" style="display:none">
+  </div>
+
+  <div class="toggle-row" role="tablist">
+    <div class="toggle-btn active" id="btnBeam" role="tab" tabindex="0">Beam Pattern</div>
+    <div class="toggle-btn" id="btnSRP" role="tab" tabindex="0" style="display:none">SRP Sim</div>
+    <div class="toggle-btn" id="btnSimulator" role="tab" tabindex="0">Simulator</div>
+    <div class="toggle-btn" id="btnRealtime" role="tab" tabindex="0">Realtime</div>
+    <div class="toggle-btn" id="btnHardware" role="tab" tabindex="0">Hardware</div>
+  </div>
+
+  <!-- Beam pattern controls -->
+  <div id="beamControls">
+    <div class="ctrl-row" id="beamGeoRow">
+      <label>Geometry</label>
+      <select id="selGeo">
+        <option value="UCA">UCA (Circular Ring)</option>
+        <option value="CROSS">Standing Cross</option>
+        <option value="ULA">ULA (Linear)</option>
+        <option value="CYLINDER">Cylinder (Stacked Rings)</option>
+        <option value="CUSTOM">Custom</option>
+      </select>
+    </div>
+    <div class="ctrl-row" id="beamMicCountRow">
+      <label>Mic Count: <span id="micCountVal">12</span></label>
+      <input type="range" id="micCount" min="4" max="32" step="1" value="12">
+    </div>
+    <div class="ctrl-row" id="beamRadiusRow">
+      <label>Array Radius: <span id="radiusVal">0.15</span> m</label>
+      <input type="range" id="arrayRadius" min="0.03" max="1.0" step="0.01" value="0.15">
+    </div>
+    <div class="ctrl-row" id="sepRow">
+      <label>Ring Separation: <span id="sepVal">0.12</span> m</label>
+      <input type="range" id="ringSep" min="0.02" max="0.50" step="0.01" value="0.12">
+    </div>
+    <hr class="sep">
+    <div class="ctrl-row">
+      <label>Steer Azimuth: <span id="steerAzVal">60</span> deg</label>
+      <input type="range" id="steerAz" min="0" max="355" step="5" value="60">
+    </div>
+    <div class="ctrl-row">
+      <label>Steer Elevation: <span id="steerElVal">30</span> deg</label>
+      <input type="range" id="steerEl" min="-90" max="90" step="5" value="30">
+    </div>
+    <div class="ctrl-row">
+      <label>Frequency: <span id="freqVal">500</span> Hz</label>
+      <input type="range" id="freq" min="50" max="20000" step="50" value="500">
+    </div>
+  </div>
+
+  <!-- SRP controls -->
+  <div id="srpControls" class="hidden">
+    <div class="ctrl-row">
+      <label>Geometry</label>
+      <select id="srpGeo"></select>
+    </div>
+    <div class="ctrl-row">
+      <label>Condition</label>
+      <select id="srpCond"></select>
+    </div>
+  </div>
+
+  <div id="customArrayBlock" class="custom-array-block hidden">
+    <div class="ctrl-row">
+      <label>Add mic (metres, offset from centre)</label>
+      <div class="custom-add-row">
+        <input id="customAddX" type="number" step="0.001" placeholder="x">
+        <input id="customAddY" type="number" step="0.001" placeholder="y">
+        <input id="customAddZ" type="number" step="0.001" placeholder="z">
+        <button id="btnCustomAdd" type="button">+ Add</button>
+      </div>
+    </div>
+    <div class="custom-mic-count">Mic count (derived): <span id="customMicCount">0</span></div>
+    <div id="customClipBanner" class="custom-clip-banner hidden"></div>
+    <div id="customList" class="custom-list"></div>
+    <canvas id="customScatter" width="260" height="150"></canvas>
+    <div class="custom-actions">
+      <button id="btnCustomSeed" type="button">Seed from preset</button>
+      <button id="btnCustomClear" type="button">Clear all</button>
+      <button id="btnCustomImport" type="button">Import file...</button>
+      <input id="customFile" type="file" accept=".json,.txt" style="display:none">
+    </div>
+  </div>
+
+  <!-- Simulator controls -->
+  <div id="simControls" class="hidden">
+    <div class="sim-basic">
+    <div class="ctrl-row" id="simGeoRow">
+      <label>Geometry</label>
+      <select id="simGeo">
+        <option value="UCA">UCA (Circular Ring)</option>
+        <option value="CROSS">Standing Cross</option>
+        <option value="ULA">ULA (Linear)</option>
+        <option value="CYLINDER">Cylinder (Stacked Rings)</option>
+        <option value="CUSTOM">Custom</option>
+      </select>
+    </div>
+    <button class="mat-preset-btn" id="btnLoadMiccanvas" type="button">Load MICCANVAS preset</button>
+    <div class="ctrl-row" id="simBeamMethodRow">
+      <label>Beamforming method</label>
+      <select id="simBeamMethod">
+        <option value="srp_phat" selected>SRP-PHAT (benchmark)</option>
+        <option value="steered_das">Mode 1: Steered DAS (scan + lock)</option>
+        <option value="beam_bank_das">Mode 2: K-beam bank (MUX select)</option>
+      </select>
+    </div>
+    <div class="ctrl-row hidden" id="simScanAnglesRow">
+      <label>Scan angles (deg, comma-sep)</label>
+      <input type="text" id="simScanAngles" value="0,45,90,135,180,225,270,315">
+    </div>l
+    <div class="ctrl-row hidden" id="simBeamKRow">
+      <label>K beams: <span id="simBeamKVal">8</span></label>
+      <input type="range" id="simBeamK" min="4" max="16" step="1" value="8">
+    </div>
+    <div class="ctrl-row" id="simMicCountRow">
+      <label>Mic Count: <span id="simMicVal">12</span></label>
+      <input type="range" id="simMicCount" min="4" max="32" step="1" value="12">
+    </div>
+    <div class="ctrl-row" id="simRadiusRow">
+      <label>Radius: <span id="simRadVal">0.15</span> m</label>
+      <input type="range" id="simRadius" min="0.03" max="1.0" step="0.01" value="0.15">
+    </div>
+    <div class="ctrl-row" id="simSepRow">
+      <label>Ring Sep: <span id="simSepVal">0.12</span> m</label>
+      <input type="range" id="simSep" min="0.02" max="0.50" step="0.01" value="0.12">
+    </div>
+    <hr class="sep">
+    <div class="ctrl-row">
+      <label>Room Length: <span id="simRoomLVal">50</span> m</label>
+      <input type="range" id="simRoomL" min="10" max="100" step="1" value="50">
+    </div>
+    <div class="ctrl-row">
+      <label>Room Width: <span id="simRoomWVal">40</span> m</label>
+      <input type="range" id="simRoomW" min="10" max="80" step="1" value="40">
+    </div>
+    <div class="ctrl-row">
+      <label>Room Height: <span id="simRoomHVal">12</span> m</label>
+      <input type="range" id="simRoomH" min="4" max="15" step="1" value="12">
+    </div>
+    <div class="ctrl-row">
+      <label>RT60: <span id="simRT60Val">1.5</span> s</label>
+      <input type="range" id="simRT60" min="0" max="2.5" step="0.1" value="1.5">
+    </div>
+    <div class="absorption-radio">
+      <label><input type="radio" name="absMode" id="absRT60" value="rt60" checked>RT60 slider</label>
+      <label><input type="radio" name="absMode" id="absMaterials" value="materials">Per-wall materials</label>
+    </div>
+    <div id="materialGrid" class="hidden">
+      <div class="mat-cell">Floor<select id="matFloor"></select></div>
+      <div class="mat-cell">Ceiling<select id="matCeiling"></select></div>
+      <div class="mat-cell">East<select id="matEast"></select></div>
+      <div class="mat-cell">West<select id="matWest"></select></div>
+      <div class="mat-cell">South<select id="matSouth"></select></div>
+      <div class="mat-cell">North<select id="matNorth"></select></div>
+    </div>
+    <button class="mat-preset-btn hidden" id="btnExhibitionHall">Exhibition Hall preset</button>
+    <hr class="sep">
+    <div class="ctrl-row">
+      <label>Source Az: <span id="simSrcAzVal">60</span> deg</label>
+      <input type="range" id="simSrcAz" min="0" max="355" step="5" value="60">
+    </div>
+    <div class="ctrl-row">
+      <label>Source El: <span id="simSrcElVal">30</span> deg</label>
+      <input type="range" id="simSrcEl" min="-90" max="90" step="5" value="30">
+    </div>
+    <div class="ctrl-row">
+      <label>Source Dist: <span id="simSrcDistVal">6.0</span> m</label>
+      <input type="range" id="simSrcDist" min="2" max="20" step="0.5" value="6">
+    </div>
+    <hr class="sep">
+    <div class="ctrl-row">
+      <label>Drone SPL: <span id="simDroneSPLVal">78</span> dB @ 1m</label>
+      <input type="range" id="simDroneSPL" min="60" max="95" step="1" value="78">
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="simDiffuse" checked>
+      <label>Realistic room mode (crowd + PA)</label>
+    </div>
+    </div>
+    <details class="advanced-settings" id="simAdvanced">
+      <summary>Advanced settings</summary>
+    <div class="ctrl-row">
+      <label>FracDelay MAX: <span id="simFracMaxVal">8</span> samples</label>
+      <input type="range" id="simFracMax" min="4" max="64" step="1" value="8">
+    </div>
+    <div class="ctrl-row">
+      <label>FracDelay taps: <span id="simFracTapsVal">16</span></label>
+      <input type="range" id="simFracTaps" min="8" max="32" step="1" value="16">
+    </div>
+    <div class="ctrl-row">
+      <label>Target DSP fs: <span id="simTargetFsVal">48000</span> Hz</label>
+      <input type="range" id="simTargetFs" min="16000" max="96000" step="8000" value="48000">
+    </div>
+    <hr class="sep">
+    <div class="ctrl-row">
+      <label>Crowd SPL: <span id="simCrowdSPLVal">67</span> dB @ 1m</label>
+      <input type="range" id="simCrowdSPL" min="55" max="80" step="1" value="67">
+    </div>
+    <div class="ctrl-row">
+      <label>PA SPL: <span id="simPASPLVal">80</span> dB @ 1m</label>
+      <input type="range" id="simPASPL" min="70" max="100" step="1" value="80">
+    </div>
+    <div class="ctrl-row">
+      <label>Mic Noise Floor: <span id="simMicFloorVal">30</span> dB SPL</label>
+      <input type="range" id="simMicFloor" min="20" max="50" step="1" value="30">
+    </div>
+    <hr class="sep">
+    <div class="check-row">
+      <input type="checkbox" id="simRandSeed" checked>
+      <label>Random seed</label>
+    </div>
+    <div class="ctrl-row hidden" id="simSeedRow">
+      <label>Seed: <span id="simSeedVal">0</span></label>
+      <input type="range" id="simSeed" min="0" max="999" step="1" value="0">
+    </div>
+    <div class="ctrl-row">
+      <label>Crowd Sources: <span id="simCrowdVal">30</span></label>
+      <input type="range" id="simCrowd" min="0" max="100" step="1" value="30">
+    </div>
+    <div class="ctrl-row">
+      <label>PA Sources: <span id="simPAVal">8</span></label>
+      <input type="range" id="simPA" min="0" max="12" step="1" value="8">
+    </div>
+    <div class="ctrl-row">
+      <label>Crowd model (Phase 3)</label>
+      <select id="simCrowdModel">
+        <option value="point_source" selected>Point sources (2b)</option>
+        <option value="plane_wave">Plane-wave diffuse (3B)</option>
+      </select>
+    </div>
+    <div class="impairment-detail" id="crowdModelDetail">
+      <label>Plane waves: <span id="simNPlaneWavesVal">64</span></label>
+      <input type="range" id="simNPlaneWaves" min="8" max="128" step="8" value="64">
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="simMismatch">
+      <label>Mic gain/phase mismatch</label>
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="simCrosstalk">
+      <label>Crosstalk</label>
+    </div>
+    <div class="impairment-detail" id="crosstalkDetail">
+      <label>Coupling: <span id="simCrosstalkDbVal">-40</span> dB</label>
+      <input type="range" id="simCrosstalkDb" min="-60" max="-20" step="1" value="-40">
+      <label style="margin-top:6px;display:block;">Model (Phase 3)</label>
+      <select id="simCrosstalkModel">
+        <option value="simple" selected>Simple (flat)</option>
+        <option value="fir_capacitive">FIR capacitive</option>
+      </select>
+      <label id="simCrosstalkCornerLabel" style="margin-top:6px;display:none;">
+        Corner: <span id="simCrosstalkCornerVal">500</span> Hz
+      </label>
+      <input type="range" id="simCrosstalkCorner" min="20" max="4000" step="20" value="500" style="display:none;">
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="simQuant">
+      <label>Codec quantization</label>
+    </div>
+    <div class="impairment-detail" id="quantDetail">
+      <label>Bit depth</label>
+      <select id="simBitDepth">
+        <option value="24">24 bit</option>
+        <option value="16" selected>16 bit</option>
+        <option value="12">12 bit</option>
+        <option value="8">8 bit</option>
+      </select>
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="simMlPreview">
+      <label>MAX78000 ML preview (Phase 3)</label>
+    </div>
+    <div class="impairment-detail" id="mlPreviewDetail">
+      <label>Audio bit depth</label>
+      <select id="simMlBitDepth">
+        <option value="16">16 bit</option>
+        <option value="8" selected>8 bit</option>
+      </select>
+      <label style="margin-top:6px;display:block;">Feature bit depth</label>
+      <select id="simMlFeatBitDepth">
+        <option value="16">16 bit</option>
+        <option value="8" selected>8 bit</option>
+      </select>
+      <label style="margin-top:6px;display:block;">Mel bands: <span id="simMlNMelsVal">64</span></label>
+      <input type="range" id="simMlNMels" min="32" max="96" step="16" value="64">
+    </div>
+    <button class="hw-preset-btn" id="btnHwPreset">Hardware-realistic preset</button>
+
+    <hr class="sep">
+    <div style="font-size:10.5px;font-weight:500;color:#888;font-family:'DM Mono',monospace;margin-bottom:6px;">Atmosphere (Phase 2b)</div>
+    <div class="ctrl-row">
+      <label>Temperature: <span id="simTempVal">20</span> &deg;C</label>
+      <input type="range" id="simTemp" min="0" max="40" step="1" value="20">
+    </div>
+    <div class="ctrl-row">
+      <label>Humidity: <span id="simHumidityVal">50</span> %</label>
+      <input type="range" id="simHumidity" min="10" max="90" step="5" value="50">
+    </div>
+    <div class="ctrl-row">
+      <label>Temp gradient dT/dz: <span id="simTempGradVal">0.0</span> &deg;C/m</label>
+      <input type="range" id="simTempGrad" min="-5" max="5" step="0.1" value="0.0">
+    </div>
+
+    <hr class="sep">
+    <div style="font-size:10.5px;font-weight:500;color:#888;font-family:'DM Mono',monospace;margin-bottom:6px;">DOA band (Phase 3+)</div>
+    <div class="ctrl-row">
+      <label>DOA fmin: <span id="simFminVal">200</span> Hz</label>
+      <input type="range" id="simFmin" min="50" max="4000" step="50" value="200">
+    </div>
+    <div class="ctrl-row">
+      <label>DOA fmax: <span id="simFmaxVal">2000</span> Hz</label>
+      <input type="range" id="simFmax" min="200" max="7000" step="50" value="2000">
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="simHarmonicComb">
+      <label>Harmonic comb weighting</label>
+    </div>
+    <div class="impairment-detail" id="harmonicCombDetail">
+      <label>Drone fundamental f0: <span id="simFundamentalVal">200</span> Hz</label>
+      <input type="range" id="simFundamental" min="80" max="400" step="5" value="200">
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="simNormalizeAudio" checked>
+      <label title="On: each run's .wav is peak-normalized for easy playback. Off: downloads preserve absolute Pascal amplitude across trials -- use for 1/r^2 or other level-comparison tests.">Normalize downloaded audio</label>
+    </div>
+
+    <hr class="sep">
+    <div class="check-row">
+      <input type="checkbox" id="simMoving">
+      <label>Moving source (Phase 2b)</label>
+    </div>
+    <div class="impairment-detail" id="movingDetail">
+      <label>Trajectory type</label>
+      <select id="simTrajType">
+        <option value="straight" selected>Straight line</option>
+        <option value="arc">Circular arc</option>
+      </select>
+      <label style="margin-top:6px;display:block;">Speed: <span id="simSpeedVal">5.0</span> m/s</label>
+      <input type="range" id="simSpeed" min="0" max="30" step="0.5" value="5">
+      <label id="simHeadingLabel" style="margin-top:6px;display:block;">Heading: <span id="simHeadingVal">0</span> &deg;</label>
+      <input type="range" id="simHeading" min="0" max="355" step="5" value="0">
+      <label style="margin-top:6px;display:block;">Trajectory chunks: <span id="simChunksVal">8</span></label>
+      <input type="range" id="simChunks" min="4" max="16" step="1" value="8">
+    </div>
+
+    <div class="ctrl-row">
+      <label>Integration: <span id="simIntVal">1000</span> ms</label>
+      <input type="range" id="simInt" min="50" max="1000" step="50" value="1000">
+    </div>
+    </details>
+  </div>
+
+  <div id="realtimeControls" class="hidden">
+    <div class="ctrl-row">
+      <label>Geometry</label>
+      <select id="rtGeo">
+        <option value="UCA">UCA</option>
+        <option value="CROSS">CROSS</option>
+        <option value="ULA">ULA</option>
+        <option value="CYLINDER">CYLINDER</option>
+        <option value="CUSTOM">Custom</option>
+      </select>
+    </div>
+    <button class="mat-preset-btn" id="btnRtMiccanvas" type="button">Load MICCANVAS preset</button>
+    <div class="ctrl-row">
+      <label>Beam method</label>
+      <select id="rtBeamMethod">
+        <option value="steered_das">Mode 1: Steered DAS</option>
+        <option value="beam_bank_das" selected>Mode 2: K-beam bank</option>
+      </select>
+    </div>
+    <div class="ctrl-row">
+      <label>K beams: <span id="rtBeamKVal">8</span></label>
+      <input type="range" id="rtBeamK" min="4" max="16" step="1" value="8">
+    </div>
+    <div class="ctrl-row">
+      <label>Integration: <span id="rtIntVal">100</span> ms</label>
+      <input type="range" id="rtInt" min="50" max="500" step="50" value="100">
+    </div>
+    <div class="ctrl-row">
+      <label>Elevation: <span id="rtElVal">0</span> deg</label>
+      <input type="range" id="rtEl" min="-30" max="60" step="5" value="0">
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="rtDiffuse" checked>
+      <label>Crowd + PA interference</label>
+    </div>
+    <div class="ctrl-row">
+      <label>Crowd count: <span id="rtCrowdVal">30</span></label>
+      <input type="range" id="rtCrowd" min="0" max="80" step="1" value="30">
+    </div>
+    <button type="button" id="btnRtPause" class="mat-preset-btn">Pause</button>
+    <div id="rtStatus" class="rt-status">Connecting...</div>
+  </div>
+
+  <div id="hardwareControls" class="hidden">
+    <div class="ctrl-row">
+      <label>Serial Port</label>
+      <div style="display:flex;gap:4px;">
+        <input type="text" id="hwSerialPort" placeholder="COM18" value="" style="flex:1;">
+        <button type="button" id="btnHwConnect" class="mat-preset-btn" style="width:auto;padding:4px 10px;margin:0;">Connect</button>
+      </div>
+    </div>
+    <div id="hwStatus" class="rt-status">Checking hardware...</div>
+    <div class="ctrl-row">
+      <label>Averaging: <span id="hwAvgVal">4</span> scans</label>
+      <input type="range" id="hwAvg" min="1" max="16" step="1" value="4">
+    </div>
+    <div class="ctrl-row">
+      <label>dB Floor: <span id="hwDbFloorVal">-40</span> dB</label>
+      <input type="range" id="hwDbFloor" min="-60" max="-10" step="5" value="-40">
+    </div>
+    <div class="ctrl-row">
+      <label>View</label>
+      <select id="hwViewMode">
+        <option value="2d">2D Polar</option>
+        <option value="3d">3D Visualiser</option>
+        <option value="split" selected>Split (2D + 3D)</option>
+      </select>
+    </div>
+    <div class="ctrl-row">
+      <label>3D Shape</label>
+      <select id="hw3dShape">
+        <option value="torus" selected>Torus</option>
+        <option value="sphere">Sphere</option>
+        <option value="particles">Particles</option>
+        <option value="bars">Bar Chart</option>
+      </select>
+    </div>
+    <hr style="border-color:#333;margin:8px 0">
+    <div class="check-row">
+      <input type="checkbox" id="hwCrtToggle" checked>
+      <label>CRT Scanlines</label>
+    </div>
+    <div style="color:#888;font-size:10px;margin-bottom:4px">Ground Truth (optional)</div>
+    <div class="ctrl-row">
+      <label>True Az: <span id="hwTrueAzVal">—</span></label>
+      <input type="range" id="hwTrueAz" min="0" max="355" step="5" value="0" disabled>
+    </div>
+    <div class="ctrl-row">
+      <label>True El: <span id="hwTrueElVal">—</span></label>
+      <input type="range" id="hwTrueEl" min="-30" max="60" step="5" value="0" disabled>
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="hwTrueEnable">
+      <label>Show true direction</label>
+    </div>
+    <button type="button" id="btnHwPause" class="mat-preset-btn">Pause</button>
+  </div>
+
+  <hr class="sep">
+  <div class="ctrl-row">
+    <label>Display Radius: <span id="dispRadVal">2.0</span> m</label>
+    <input type="range" id="dispRadius" min="0.5" max="5" step="0.1" value="2.0">
+  </div>
+  <div class="ctrl-row">
+    <label>Opacity: <span id="opacityVal">0.70</span></label>
+    <input type="range" id="opacity" min="0.1" max="1.0" step="0.05" value="0.70">
+  </div>
+</div>
+
+<button id="btnRun" class="run-btn-fixed hidden">Run Simulation</button>
+
+<div id="info" class="panel">
+  <div id="infoText"></div>
+  <div id="mipsText" style="margin-top:4px;font-family:'DM Mono',monospace;font-size:10px;color:#8fb9d8;"></div>
+  <div id="beamPolarWrap" class="hidden" style="margin-top:6px;">
+    <div class="heatmap-label"><span>Beam scan power</span><span id="beamPolarRange"></span></div>
+    <canvas id="beamPolar" width="280" height="280"></canvas>
+  </div>
+  <div id="heatmapWrap" class="hidden">
+    <div class="heatmap-label"><span>SRP-PHAT power (az × el)</span><span id="heatmapRange"></span></div>
+    <canvas id="heatmapCanvas" width="72" height="19"></canvas>
+    <div class="top-cand" id="topCandidates"></div>
+  </div>
+</div>
+
+<div id="legend" class="panel">
+  <div style="color:#999;margin-bottom:4px;font-weight:500">SCENE</div>
+  <div><span class="legend-dot" style="background:#7ecfff"></span>Microphones</div>
+  <div><span class="legend-dot" style="background:#ffcc44"></span>Estimated DOA</div>
+  <div><span class="legend-dot" style="background:#44cc44"></span>True direction</div>
+  <div><span class="legend-dot" style="background:#ff4444"></span>Drone source</div>
+  <div><span class="legend-dot" style="background:#ffdd77"></span>Trajectory (moving)</div>
+  <div><span class="legend-dot" style="background:#ff8833"></span>Crowd noise</div>
+  <div><span class="legend-dot" style="background:#aa44ff"></span>PA speaker</div>
+  <div><span class="legend-dot" style="background:rgba(255,68,68,0.35)"></span>Reflections</div>
+  <div style="margin-top:4px"><span class="legend-dot" style="background:#ff3344"></span>High power</div>
+  <div><span class="legend-dot" style="background:#0a1628"></span>Low power</div>
+</div>
+
+<div id="spinner"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+
+<div id="rirWrap">
+  <div class="rir-label">RIR (mic 0, drone src)</div>
+  <canvas id="rirCanvas" width="250" height="80"></canvas>
+</div>
+
+<div id="audioWrap">
+  <div class="audio-toggle">
+    <div class="toggle-btn" id="btnAudioRaw">Raw Mic</div>
+    <div class="toggle-btn" id="btnAudioUnsteered">Unsteered</div>
+    <div class="toggle-btn active" id="btnAudioBeam">Beamformed</div>
+    <div class="toggle-btn hidden" id="btnAudioMl">ML (int8/16)</div>
+  </div>
+  <audio id="audioPlayer" controls></audio>
+  <div class="download-row">
+    <a class="dl-btn" id="dlRaw" download="raw.wav">Raw .wav</a>
+    <a class="dl-btn" id="dlUnsteered" download="unsteered.wav">Unsteered .wav</a>
+    <a class="dl-btn" id="dlBeam" download="beamformed.wav">Beam .wav</a>
+    <a class="dl-btn hidden" id="dlMl" download="ml_preview.wav">ML .wav</a>
+  </div>
+  <div id="mlSpectrogramWrap" class="hidden" style="margin-top:8px;">
+    <img id="mlSpectrogramImg" alt="ML log-mel spectrogram"
+         style="width:100%;border-radius:4px;border:1px solid #233"/>
+  </div>
+</div>
+
+<canvas id="canvas3d"></canvas>
+
+<div id="realtimeWrap" class="hidden">
+  <canvas id="birdsEye"></canvas>
+  <div id="rtMetrics"></div>
+  <div id="rtGeoOverlay">—</div>
+  <div id="rtTimeline"><canvas id="rtTimelineCanvas"></canvas></div>
+</div>
+
+<div id="hardwareWrap" class="hidden">
+  <div class="hw-scanlines hidden" id="hwScanlines"></div>
+  <div class="hw-vignette"></div>
+  <canvas id="hwBirdsEye" style="display:block;width:100%;height:calc(100% - 140px);cursor:crosshair;padding:20px;"></canvas>
+  <div id="hwMetricsWrap" style="position:fixed;bottom:155px;left:12px;display:flex;align-items:flex-start;gap:1px;z-index:50;">
+    <div id="hwMetrics" style="background:rgba(10,6,4,0.92);padding:10px 14px;border-radius:0;border:2px solid rgba(217,75,0,0.3);box-shadow:inset 0 0 0 1px #1a0a04;font-size:12px;color:#ffffff;line-height:1.7;min-width:220px;"></div>
+    <canvas id="hwSonar" width="18" height="18" style="margin-top:1px;margin-left:1px;"></canvas>
+  </div>
+  <div id="hwStatsLine" style="position:absolute;bottom:120px;left:0;right:0;height:18px;background:rgba(10,6,4,0.9);border-top:1px solid rgba(217,75,0,0.3);font-size:11px;color:#b89878;padding:2px 10px;z-index:4;"></div>
+  <div id="hwTimeline" style="position:absolute;bottom:0;left:0;right:0;height:120px;"><canvas id="hwTimelineCanvas" style="display:block;width:100%;height:100%;"></canvas></div>
+</div>
+
+<div id="hwHeaderBar" class="hidden">
+  <span>UTC: <span id="hbTime">--:--:--</span></span>
+  <span class="hb-sep">|</span>
+  <span>ARRAY: MICCANVAS-15</span>
+  <span class="hb-sep">|</span>
+  <span>PORT: <span id="hbPort">--</span></span>
+  <span class="hb-sep">|</span>
+  <span class="hb-status">STATUS: <span id="hbStatus">IDLE</span></span>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
