@@ -1,37 +1,98 @@
-# Prerequisites: 
+# Acoustic Visualiser
 
-- Make sure you have Python on your computer. This simulation was built on Python 3.14. 
-- To ensure that packages stay isolated to this repo, start up a virtual environment to install the necessary prerequisite packages. 
-- Run the following command: 
+The project has one Vite frontend source under `app/` and one FastAPI backend in
+`sim_server.py`. Do not maintain a separate HTML implementation under
+`results/`.
 
+## Setup
+
+```powershell
 python -m venv .venv
-
-- The virtual environment is now created. Now activate it,
-
 .venv\Scripts\activate
+python -m pip install -r requirements-dev.txt
+cd app
+npm install
+```
 
-- Then install the packages,
+## Browser Development
 
-python -m pip install -r 'requirements.txt'
+Start the backend:
 
-You should now have the necessary packages required to use the simulation. 
+```powershell
+.venv\Scripts\python.exe sim_server.py
+```
 
-# How to run the program: 
+Start the frontend in another terminal:
 
-- Ensure that you are always in the virtual environment before you run the simulation. Otherwise, you will not have access to the prerequisite python packages, which means the simulation fails. 
+```powershell
+cd app
+npm run dev -- --host 127.0.0.1 --port 8080
+```
 
-- So if you are not in a virtual environment, do this again (from the repo's root):
+Open `http://127.0.0.1:8080/`.
 
-.venv\Scripts\activate
+## Hardware-Free Heimdall Demo
 
-- Then start the backend python server:
+The firmware emulator speaks the same parsed protocol and uses the same
+WebSocket path as serial hardware:
 
-python sim_server.py 
+```powershell
+.venv\Scripts\python.exe sim_server.py --emulator
+```
 
-- And then start the frontend HTML server: 
+Open the Hardware tab and use `Full Sweep`, `Continuous`, `Track`, `Stop`, or
+direct sector steering. `Steer` fixes the beam and reports one level; `Measure`
+samples that fixed beam again without rewriting its delays. The emulator
+supplies a moving target over the current 7x7 grid and is suitable for GUI,
+protocol, reconnect, and command testing.
 
-python -m http.server 8080
+The Hardware tab can also start or replace the emulator at runtime without
+restarting the backend.
 
-Your simulation should now be running. Navigate to results\array_explorer.html — tabs are **Beam Pattern**, **SRP Sim**, **Simulator** (one-shot full physics), and **Realtime** (continuous top-down stream over WebSocket). 
+Expand `Emulator Grid` before clicking `Start Emulator` to set 1-20 rows and
+columns plus azimuth/elevation limits. These use the same cell-center convention
+as `beamforming_mathematics/hemisphere_scan_visualizer.py`, so they are useful
+for testing candidate table layouts before generating firmware coefficients.
 
-If you get any errors relating to processes failing to start because one already exists, that means you do not need to perform the above steps. Unless you made changes to the python files performing backend functions, any frontend HTML changes should be served immediately. 
+`Monitor Beam` steers once and repeatedly issues `M` at 10, 20, or 50 Hz. Only
+the selected sector updates because the beam remains fixed; the yellow timeline
+trace shows its level as the emulated source moves. Starting a sweep, tracking,
+manual steering, or disconnecting stops monitoring automatically.
+
+## Serial Hardware
+
+Start the backend normally, open the Hardware tab, enter the COM port, select
+921600 or 115200 baud, and click `Connect`. Serial transports can be replaced at
+runtime through `/hw_connect`; the simulation backend does not restart.
+
+The host sends `I` on connection so a late GUI receives:
+
+```text
+READY,2D,<rows>,<columns>,<sectors>,<microphones>
+AZIMUTH,<count>,...
+ELEVATION,<count>,...
+```
+
+The UI supports generated grids up to 20x20 and forwards `S/F/C/G/X/I/M` firmware
+commands over the existing `/realtime_hw` WebSocket.
+
+To test a layout on real hardware, generate `beam_table_2d.h` in the sibling
+`beamforming_mathematics` visualizer, replace the MAX78002 firmware copy, perform
+a clean build, flash it, and reconnect. The firmware `I` response makes the GUI
+adopt the new rows, columns, and center angles automatically.
+
+## Tests
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q `
+  tests\test_heimdall_protocol.py tests\test_heimdall_api.py
+
+cd app
+npm run build
+```
+
+The backend tests cover strict protocol parsing, dynamic dimensions, emulator
+commands, FastAPI lifecycle, and WebSocket frames.
+
+Browser mode is the supported development and hardware bring-up path because
+backend logs and failures are directly visible.

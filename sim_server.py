@@ -22,6 +22,8 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from heimdall_transport import EmulatorHeimdallTransport, SerialHeimdallTransport
+
 from acoustic_utils import (
     air_absorption_kwargs,
     apply_codec_quantization,
@@ -1239,125 +1241,8 @@ def on_startup():
 
 import threading
 
-_hw_serial_reader = None  # Global instance, set by __main__ when --serial-port given
-
-
-class HardwareSerialReader(threading.Thread):
-    """
-    Reads beam scan data from MAX78000 over UART.
-
-    Protocol:
-        P,<angle_deg>,<level_raw_u32>   -- one measurement (8.24 fixed-point)
-        SCAN_DONE                       -- full sweep complete
-
-    Mirrors the proven pattern from MAX78K/beam_scan_gui.py:
-    - Non-blocking serial read (timeout=0)
-    - Manual rx_buf accumulation + newline splitting
-    - Index derived from angle value (not message order) for robustness
-    - Scan latched only on SCAN_DONE
-    """
-
-    def __init__(self, port, baud=115200, num_angles=72, angle_step=5, avg_count=4):
-        super().__init__(daemon=True)
-        import serial
-        self.ser = serial.Serial(port, baud, timeout=0)
-        self.port = port
-        self.baud = baud
-        self.num_angles = num_angles
-        self.angle_step = angle_step
-        self.avg_count = max(1, avg_count)
-
-        self.levels = np.zeros(num_angles, dtype=np.float64)
-        self.latest_scan = np.zeros(num_angles, dtype=np.float64)
-        self.scan_ready = False
-        self.scan_count = 0
-        self.running = True
-        self.lock = threading.Lock()
-        self.rx_buf = b""
-
-        # Scan averaging history
-        self.scan_history = np.zeros((self.avg_count, num_angles), dtype=np.float64)
-        self.history_idx = 0
-        self.history_filled = 0
-
-        # Timing for FPS measurement
-        self._last_scan_time = time.time()
-        self._scan_interval_s = 0.2  # Initial estimate
-
-    def run(self):
-        import time as _time
-        while self.running:
-            n = self.ser.in_waiting
-            if n > 0:
-                data = self.ser.read(n)
-                self.rx_buf += data
-                while b"\n" in self.rx_buf:
-                    line_bytes, self.rx_buf = self.rx_buf.split(b"\n", 1)
-                    line = line_bytes.decode(errors="ignore").strip()
-                    self._process_line(line)
-            else:
-                _time.sleep(0.001)
-
-    def _process_line(self, line):
-        if line.startswith("P,"):
-            parts = line.split(",")
-            if len(parts) == 3:
-                try:
-                    angle = int(parts[1])
-                    raw = int(parts[2])
-                    idx = angle // self.angle_step
-                    if 0 <= idx < self.num_angles:
-                        # Convert 8.24 raw to linear (same as beam_scan_gui.py)
-                        self.levels[idx] = raw / 16777216.0
-                except ValueError:
-                    pass
-        elif line == "SCAN_DONE":
-            now = time.time()
-            self._scan_interval_s = now - self._last_scan_time
-            self._last_scan_time = now
-
-            # Store in averaging history
-            self.scan_history[self.history_idx % self.avg_count] = self.levels
-            self.history_idx += 1
-            if self.history_filled < self.avg_count:
-                self.history_filled += 1
-
-            # Compute averaged scan
-            averaged = np.mean(
-                self.scan_history[:self.history_filled], axis=0
-            )
-
-            with self.lock:
-                self.latest_scan[:] = averaged
-                self.scan_count += 1
-                self.scan_ready = True
-
-    def get_scan(self):
-        """Return (scan_array_or_None, scan_count). Clears ready flag."""
-        with self.lock:
-            if not self.scan_ready:
-                return None, self.scan_count
-            self.scan_ready = False
-            return self.latest_scan.copy(), self.scan_count
-
-    @property
-    def scan_rate_hz(self):
-        if self._scan_interval_s > 0:
-            return 1.0 / self._scan_interval_s
-        return 0.0
-
-    def set_avg_count(self, n):
-        n = max(1, min(16, n))
-        with self.lock:
-            if n != self.avg_count:
-                self.avg_count = n
-                self.scan_history = np.zeros((n, self.num_angles), dtype=np.float64)
-                self.history_idx = 0
-                self.history_filled = 0
-
-    def stop(self):
-        self.running = False
-        self.ser.close()
+_heimdall_transport = None
+_heimdall_transport_lock = threading.Lock()
 
 
 # ── Hardware WebSocket endpoint ────────────────────────────────────────────────
@@ -1366,119 +1251,117 @@ _hw_true_az_deg = None   # User-set ground truth for calibration
 _hw_true_el_deg = None
 
 
+class HardwareConnectRequest(BaseModel):
+    transport: str = "serial"
+    port: str | None = None
+    baud: int = 921600
+    rows: int = 7
+    columns: int = 7
+    azimuth_min_deg: float = -70.0
+    azimuth_max_deg: float = 70.0
+    elevation_min_deg: float = -60.0
+    elevation_max_deg: float = 60.0
+
+
+def _replace_heimdall_transport(transport):
+    global _heimdall_transport
+    with _heimdall_transport_lock:
+        previous = _heimdall_transport
+        _heimdall_transport = transport
+    if previous is not None:
+        previous.stop()
+        if isinstance(previous, threading.Thread):
+            previous.join(timeout=1.0)
+    if transport is not None:
+        transport.start()
+
+
+@app.post("/hw_connect")
+def hw_connect(request: HardwareConnectRequest):
+    """Connect serial hardware or start the protocol-faithful emulator."""
+    try:
+        if request.transport == "emulator":
+            transport = EmulatorHeimdallTransport(
+                rows=request.rows,
+                columns=request.columns,
+                azimuth_min_deg=request.azimuth_min_deg,
+                azimuth_max_deg=request.azimuth_max_deg,
+                elevation_min_deg=request.elevation_min_deg,
+                elevation_max_deg=request.elevation_max_deg,
+            )
+        elif request.transport == "serial":
+            if not request.port:
+                raise ValueError("serial port is required")
+            transport = SerialHeimdallTransport(request.port, request.baud)
+        else:
+            raise ValueError("transport must be 'serial' or 'emulator'")
+        _replace_heimdall_transport(transport)
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"status": "connecting", "transport": transport.transport_name}
+
+
+@app.post("/hw_disconnect")
+def hw_disconnect():
+    _replace_heimdall_transport(None)
+    return {"status": "disconnected"}
+
+
+@app.on_event("shutdown")
+def stop_hardware_transport():
+    _replace_heimdall_transport(None)
+
+
 @app.get("/hw_status")
 def hw_status():
-    """Check if hardware serial reader is active."""
-    if _hw_serial_reader is None:
-        return {"available": False, "port": None, "scan_rate_hz": 0, "scan_count": 0}
+    """Return the active serial or emulator transport state."""
+    with _heimdall_transport_lock:
+        transport = _heimdall_transport
+    if transport is None:
+        return {"available": False, "connected": False, "transport": "disconnected"}
+    snapshot = transport.snapshot()
     return {
         "available": True,
-        "port": _hw_serial_reader.port,
-        "baud": _hw_serial_reader.baud,
-        "num_angles": _hw_serial_reader.num_angles,
-        "angle_step": _hw_serial_reader.angle_step,
-        "avg_count": _hw_serial_reader.avg_count,
-        "scan_rate_hz": round(_hw_serial_reader.scan_rate_hz, 2),
-        "scan_count": _hw_serial_reader.scan_count,
+        "connected": snapshot["connected"],
+        "transport": snapshot["transport"],
+        "configuration": snapshot["configuration"],
+        "scan_count": snapshot["scan_count"],
+        "protocol_errors": snapshot["protocol_errors"],
     }
 
 
 @app.websocket("/realtime_hw")
 async def realtime_hw_ws(ws: WebSocket):
-    """Stream real beam-scan data from MAX78000 hardware over WebSocket."""
+    """Stream parsed Heimdall state and forward commands to the active transport."""
     global _hw_true_az_deg, _hw_true_el_deg
 
-    if _hw_serial_reader is None:
-        await ws.close(code=4001, reason="No serial port configured. Start server with --serial-port.")
+    with _heimdall_transport_lock:
+        transport = _heimdall_transport
+    if transport is None:
+        await ws.close(code=4001, reason="No serial or emulator transport configured.")
         return
 
     await ws.accept()
-
-    reader = _hw_serial_reader
-    angles_deg = [float(i * reader.angle_step) for i in range(reader.num_angles)]
-
-    # Send init payload
-    init_payload = {
-        "type": "init",
-        "mode": "hardware",
-        "room_dim": [1.0, 1.0, 1.0],
-        "array_center": [0.5, 0.5, 0.5],
-        "mic_positions": [],
-        "geometry": "HARDWARE",
-        "n_mics": 0,
-        "beam_method": "hardware_scan",
-        "beam_scan_angles_deg": angles_deg,
-        "source_pos": None,
-        "true_az_deg": _hw_true_az_deg,
-        "true_el_deg": _hw_true_el_deg,
-        "port": reader.port,
-        "num_angles": reader.num_angles,
-        "angle_step": reader.angle_step,
-        "avg_count": reader.avg_count,
-    }
-    await ws.send_json(init_payload)
-
-    # Start frame push loop
-    frame_idx = 0
-    t0 = time.time()
+    await ws.send_json(_hardware_payload("init", transport.snapshot()))
     paused = False
+    last_sequence = -1
 
     async def push_loop():
-        nonlocal frame_idx, paused
+        nonlocal last_sequence, paused
         while True:
             if paused:
                 await asyncio.sleep(0.05)
                 continue
-
-            scan, scan_count = reader.get_scan()
-            if scan is None:
+            snapshot = transport.snapshot()
+            if snapshot["sequence"] == last_sequence:
                 await asyncio.sleep(0.010)
                 continue
-
-            # Convert linear levels to dB
-            levels_clamped = np.maximum(scan, 1e-12)
-            powers_db = (20.0 * np.log10(levels_clamped)).tolist()
-
-            argmax_idx = int(np.argmax(scan))
-            est_az_deg = float(angles_deg[argmax_idx])
-
-            # Margin: difference between top two peaks
-            sorted_db = sorted(powers_db, reverse=True)
-            margin_db = sorted_db[0] - sorted_db[1] if len(sorted_db) > 1 else 0.0
-
-            frame_idx += 1
-            frame = {
-                "type": "frame",
-                "frame_idx": frame_idx,
-                "t_sim_s": round(time.time() - t0, 3),
-                "beam_method": "hardware_scan",
-                "beam_scan": {
-                    "angles_deg": angles_deg,
-                    "powers_db": powers_db,
-                    "argmax_idx": argmax_idx,
-                    "clamp_notes": [],
-                },
-                "est_az_deg": round(est_az_deg, 1),
-                "est_el_deg": 0.0,
-                "true_az_deg": _hw_true_az_deg,
-                "true_el_deg": _hw_true_el_deg,
-                "margin_db": round(margin_db, 2),
-                "argmax_db": round(sorted_db[0], 2) if sorted_db else 0.0,
-                "source_pos": None,
-                "mic_positions": [],
-                "geometry": "HARDWARE",
-                "n_mics": 0,
-                "integration_ms": int(reader._scan_interval_s * 1000),
-                "scan_rate_hz": round(reader.scan_rate_hz, 2),
-                "scan_count": scan_count,
-            }
-
+            last_sequence = snapshot["sequence"]
             try:
-                await ws.send_json(frame)
+                await ws.send_json(_hardware_payload("frame", snapshot))
             except (WebSocketDisconnect, RuntimeError):
                 return
-
-            await asyncio.sleep(0.010)  # Poll at 100 Hz, send as fast as scans arrive
+            await asyncio.sleep(0.005)
 
     loop_task = asyncio.create_task(push_loop())
 
@@ -1494,16 +1377,17 @@ async def realtime_hw_ws(ws: WebSocket):
                 paused = True
             elif mtype == "resume":
                 paused = False
-            elif mtype == "set_avg":
-                reader.set_avg_count(int(msg.get("avg", 4)))
+            elif mtype == "command":
+                try:
+                    transport.send_command(str(msg.get("command", "")))
+                except (OSError, ValueError) as error:
+                    await ws.send_json({"type": "command_error", "detail": str(error)})
             elif mtype == "set_true_dir":
                 _hw_true_az_deg = float(msg["az_deg"]) if msg.get("az_deg") is not None else None
                 _hw_true_el_deg = float(msg["el_deg"]) if msg.get("el_deg") is not None else None
             elif mtype == "request_init":
-                init_payload["true_az_deg"] = _hw_true_az_deg
-                init_payload["true_el_deg"] = _hw_true_el_deg
-                init_payload["avg_count"] = reader.avg_count
-                await ws.send_json(init_payload)
+                transport.send_command("I")
+                await ws.send_json(_hardware_payload("init", transport.snapshot()))
     except WebSocketDisconnect:
         pass
     finally:
@@ -1512,6 +1396,71 @@ async def realtime_hw_ws(ws: WebSocket):
             await loop_task
         except asyncio.CancelledError:
             pass
+
+
+def _hardware_payload(payload_type, snapshot):
+    configuration = snapshot["configuration"]
+    candidates = []
+    if configuration is not None:
+        for row in range(configuration["rows"]):
+            for column in range(configuration["columns"]):
+                level_db = snapshot["levels_db"][row][column]
+                if level_db is not None:
+                    candidates.append((level_db, row, column))
+    candidates.sort(reverse=True)
+
+    target = snapshot["target"]
+    last_record = snapshot["last_record"]
+    last_steer = snapshot["last_steer"]
+    if target is not None:
+        estimated_azimuth = target["azimuth_deg"]
+        estimated_elevation = target["elevation_deg"]
+    elif last_steer is not None:
+        estimated_azimuth = last_steer["azimuth_deg"]
+        estimated_elevation = last_steer["elevation_deg"]
+    elif candidates and snapshot["azimuth_deg"] and snapshot["elevation_deg"]:
+        _, row, column = candidates[0]
+        estimated_azimuth = snapshot["azimuth_deg"][column]
+        estimated_elevation = snapshot["elevation_deg"][row]
+    else:
+        estimated_azimuth = None
+        estimated_elevation = None
+
+    margin_db = candidates[0][0] - candidates[1][0] if len(candidates) > 1 else 0.0
+    timing = snapshot["last_timing"]
+    scan_rate_hz = None
+    if (timing is not None and timing.get("wall_us", 0) > 0 and configuration is not None
+            and timing.get("sector_count") == configuration["sectors"]):
+        scan_rate_hz = 1_000_000.0 / timing["wall_us"]
+    return {
+        "type": payload_type,
+        "sequence": snapshot["sequence"],
+        "timestamp_s": time.time(),
+        "mode": "hardware",
+        "beam_method": "hardware_sector_scan",
+        "transport": snapshot["transport"],
+        "connected": snapshot["connected"],
+        "configuration": configuration,
+        "azimuth_deg": snapshot["azimuth_deg"],
+        "elevation_deg": snapshot["elevation_deg"],
+        "levels_raw": snapshot["levels_raw"],
+        "levels_db": snapshot["levels_db"],
+        "scan_count": snapshot["scan_count"],
+        "firmware_mode": snapshot["mode"],
+        "target": target,
+        "last_steer": last_steer,
+        "last_timing": timing,
+        "last_error": snapshot["last_error"],
+        "last_record": last_record,
+        "protocol_errors": snapshot["protocol_errors"],
+        "est_az_deg": estimated_azimuth,
+        "est_el_deg": estimated_elevation,
+        "true_az_deg": _hw_true_az_deg,
+        "true_el_deg": _hw_true_el_deg,
+        "margin_db": margin_db,
+        "argmax_db": candidates[0][0] if candidates else None,
+        "scan_rate_hz": scan_rate_hz,
+    }
 
 
 if __name__ == "__main__":
@@ -1523,26 +1472,22 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--serial-port", type=str, default=None,
                         help="COM port for MAX78000 hardware (e.g. COM3). Enables /realtime_hw.")
-    parser.add_argument("--serial-baud", type=int, default=115200)
-    parser.add_argument("--serial-num-angles", type=int, default=72)
-    parser.add_argument("--serial-angle-step", type=int, default=5)
-    parser.add_argument("--serial-avg", type=int, default=4,
-                        help="Number of scans to average for hardware mode")
+    parser.add_argument("--serial-baud", type=int, default=921600)
+    parser.add_argument("--emulator", action="store_true",
+                        help="Start the Heimdall firmware emulator")
     args = parser.parse_args()
 
-    if args.serial_port:
+    if args.emulator:
+        _replace_heimdall_transport(EmulatorHeimdallTransport())
+        print("Heimdall firmware emulator started")
+    elif args.serial_port:
         try:
-            _hw_serial_reader = HardwareSerialReader(
-                port=args.serial_port,
-                baud=args.serial_baud,
-                num_angles=args.serial_num_angles,
-                angle_step=args.serial_angle_step,
-                avg_count=args.serial_avg,
+            _replace_heimdall_transport(
+                SerialHeimdallTransport(args.serial_port, args.serial_baud)
             )
-            _hw_serial_reader.start()
             print(f"Hardware serial reader started on {args.serial_port} @ {args.serial_baud} baud")
         except Exception as e:
             print(f"Failed to open serial port {args.serial_port}: {e}")
-            _hw_serial_reader = None
+            _replace_heimdall_transport(None)
 
     uvicorn.run(app, host=args.host, port=args.port, reload=False)

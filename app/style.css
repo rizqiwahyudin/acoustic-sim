@@ -176,6 +176,13 @@ body.hardware-mode .check-row input[type=checkbox]{accent-color:#ffcc66}
 body.hardware-mode .ctrl-row label{color:#b89878}
 body.hardware-mode .mat-preset-btn{background:#1a1008;color:#ffcc66;border-color:rgba(217,75,0,0.4)}
 body.hardware-mode .mat-preset-btn:hover{background:#2a1a0c}
+.hw-command-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:8px 0}
+.hw-command-grid .mat-preset-btn{margin:0;min-width:0}
+.hw-emulator-settings{margin:6px 0}
+.hw-emulator-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.hw-emulator-grid label{display:flex;flex-direction:column;gap:3px;color:#b89878;font-size:10px}
+.hw-emulator-grid input{width:100%;box-sizing:border-box}
+#btnHwMonitor.active{background:#173425;color:#70e89a;border-color:#5fd28a}
 #realtimeWrap{position:fixed;inset:0;z-index:1;background:#020805}
 #realtimeWrap.hidden{display:none}
 #birdsEye{display:block;width:100%;height:calc(100% - 90px);cursor:crosshair}

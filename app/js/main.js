@@ -511,6 +511,7 @@ function setMode(m) {
       document.body.classList.add('hardware-3d-active', 'hardware-split');
     }
     document.getElementById('hwBirdsEye').style.display = (vmode === '3d') ? 'none' : 'block';
+    if (vmode !== '2d') frameHardwareDome();
   }
 
   if (m === 'realtime') stopOneShotExtras();
@@ -1655,30 +1656,11 @@ window.addEventListener('resize', resizeBirdsEye);
 function animate() {
   requestAnimationFrame(animate);
 
-  // ── Hardware interpolation: lerp display toward target at 60 FPS ──
-  if (mode === 'hardware' && hwTargetPowers && hwDisplayPowers && hwLastFrame) {
-    let moved = false;
-    for (let i = 0; i < hwDisplayPowers.length; i++) {
-      const diff = hwTargetPowers[i] - hwDisplayPowers[i];
-      if (Math.abs(diff) > 0.01) {
-        hwDisplayPowers[i] += diff * HW_LERP_SPEED;
-        moved = true;
-      } else {
-        hwDisplayPowers[i] = hwTargetPowers[i];
-      }
-    }
-    if (moved || hwNeedsRedraw) {
+  if (mode === 'hardware' && hwLastFrame) {
+    if (hwNeedsRedraw) {
       hwNeedsRedraw = false;
-      const interpFrame = {
-        ...hwLastFrame,
-        beam_scan: {
-          ...hwLastFrame.beam_scan,
-          powers_db: hwDisplayPowers,
-          angles_deg: hwAngles,
-        },
-      };
-      drawHwBirdsEye(interpFrame);
-      updateHw3dRing(interpFrame);
+      drawHwBirdsEye(hwLastFrame);
+      updateHw3dRing(hwLastFrame);
     }
     // Sonar: lerp toward target angle (one full rev per scan)
     const sonarDiff = hwSonarTargetAngle - hwSonarAngle;
@@ -1708,12 +1690,10 @@ let hwLastFrame = null;
 let hwPowerHistory = [];
 const HW_HISTORY_MAX = 500;
 let hwPaused = false;
+let hwMonitoring = false;
+let hwMonitorTimer = null;
 
 // -- Interpolation state for 60 FPS smooth animation --
-let hwTargetPowers = null;   // Latest scan from hardware (raw dB)
-let hwDisplayPowers = null;  // Currently displayed values (lerped toward target)
-let hwAngles = null;         // Angle array from init
-const HW_LERP_SPEED = 0.02; // Blend factor per frame (0.12 @ 60fps ≈ 120ms settle)
 let hwNeedsRedraw = false;
 let hwSonarTargetAngle = 0;
 let hwAfterglowHistory = []; // stores last 5 interpVals arrays for phosphor decay
@@ -1775,13 +1755,11 @@ function updateJetParticles() {
 }
 
 function stopHardwareSession() {
+  stopHwMonitor();
   if (hwWs) { hwWs.close(); hwWs = null; }
   hwInit = null;
   hwLastFrame = null;
   hwPowerHistory = [];
-  hwTargetPowers = null;
-  hwDisplayPowers = null;
-  hwAngles = null;
   hwNeedsRedraw = false;
   hwRingGroup.clear();
   hwArrayMarkerGroup.visible = false;
@@ -1815,53 +1793,54 @@ function startHardwareSession() {
   hwWs.onopen = () => {
     statusEl.textContent = 'Connected';
     hwSend({ type: 'resume' });
-    // Push current settings
-    const avg = parseInt(document.getElementById('hwAvg').value);
-    hwSend({ type: 'set_avg', avg });
+    hwSend({ type: 'request_init' });
   };
   hwWs.onmessage = (ev) => {
     try { onHardwareMessage(JSON.parse(ev.data)); }
     catch (e) { console.warn('hw parse', e); }
   };
   hwWs.onclose = () => {
-    if (mode === 'hardware') statusEl.textContent = 'Disconnected (is sim_server.py running with --serial-port?)';
+    stopHwMonitor();
+    if (mode === 'hardware') statusEl.textContent = 'Disconnected';
   };
   hwWs.onerror = () => {
-    statusEl.textContent = 'WebSocket error — no serial port?';
+    statusEl.textContent = 'WebSocket error';
   };
 }
 
 function onHardwareMessage(msg) {
   if (msg.type === 'init') {
     hwInit = msg;
-    document.getElementById('hwStatus').textContent =
-      `Connected · ${msg.port || '?'} · ${msg.num_angles} angles × ${msg.angle_step}°`;
+    const cfg = msg.configuration;
+    document.getElementById('hwStatus').textContent = cfg
+      ? `Connected · ${msg.transport} · ${cfg.rows} × ${cfg.columns} · ${cfg.microphones} mics`
+      : `Connected · ${msg.transport} · waiting for firmware info`;
+    if (cfg) document.getElementById('hwSector').max = cfg.sectors - 1;
     return;
   }
   if (msg.type === 'frame') {
     hwLastFrame = msg;
+    if (!msg.connected) {
+      document.getElementById('hwStatus').textContent = `Disconnected · ${msg.transport}`;
+    }
     renderHwMetrics(msg);
-    if (msg.beam_scan && msg.beam_scan.powers_db) {
-      // Set interpolation target (don't render directly)
-      hwTargetPowers = msg.beam_scan.powers_db.slice();
-      hwAngles = msg.beam_scan.angles_deg;
-      if (!hwDisplayPowers || hwDisplayPowers.length !== hwTargetPowers.length) {
-        hwDisplayPowers = hwTargetPowers.slice(); // First frame: snap
-      }
+    if (msg.levels_db && msg.configuration) {
       hwNeedsRedraw = true;
-
-      // Advance sonar target: full revolution per scan
-      hwSonarTargetAngle += 2 * Math.PI;
+      hwSonarTargetAngle += Math.PI / Math.max(1, msg.configuration.sectors);
       updateHwHeader(msg);
-
       hwPowerHistory.push({
-        t: msg.t_sim_s,
-        powers: msg.beam_scan.powers_db.slice(),
-        argmax: msg.beam_scan.argmax_idx,
+        t: msg.timestamp_s,
+        azimuth: msg.est_az_deg,
+        elevation: msg.est_el_deg,
+        level: hwFixedBeamLevel(msg) ?? msg.argmax_db,
       });
       if (hwPowerHistory.length > HW_HISTORY_MAX) hwPowerHistory.shift();
-      renderHwTimeline();
+      renderHwTimeline2d();
     }
+    return;
+  }
+  if (msg.type === 'command_error') {
+    document.getElementById('hwStatus').textContent = `Command error · ${msg.detail}`;
   }
 }
 
@@ -1889,6 +1868,11 @@ function drawHwBirdsEye(frame) {
   const W = canvas.width, H = canvas.height;
   ctx.fillStyle = '#040810';
   ctx.fillRect(0, 0, W, H);
+
+  if (frame.levels_db && frame.configuration) {
+    drawHwSectorHeatmap(ctx, W, H, frame);
+    return;
+  }
 
   // Draw dot grid on canvas
   ctx.fillStyle = 'rgba(217,75,0,0.08)';
@@ -2127,6 +2111,101 @@ function drawHwBirdsEye(frame) {
   ctx.stroke();
 }
 
+function hwHeatColor(value) {
+  const clamped = Math.max(0, Math.min(1, value));
+  const low = new THREE.Color(0x050505);
+  const mid = new THREE.Color(0xd94b00);
+  const high = new THREE.Color(0xffffdd);
+  const color = clamped < 0.5
+    ? low.lerp(mid, clamped * 2)
+    : mid.lerp(high, (clamped - 0.5) * 2);
+  return `rgb(${Math.round(color.r * 255)},${Math.round(color.g * 255)},${Math.round(color.b * 255)})`;
+}
+
+function drawHwSectorHeatmap(ctx, W, H, frame) {
+  const cfg = frame.configuration;
+  const azimuths = frame.azimuth_deg;
+  const elevations = frame.elevation_deg;
+  const levels = frame.levels_db;
+  const finite = levels.flat().filter(Number.isFinite);
+  const peak = finite.length ? Math.max(...finite) : 0;
+  const dynamicRange = Math.abs(parseFloat(document.getElementById('hwDbFloor').value) || -40);
+  const floor = peak - dynamicRange;
+  const marginLeft = Math.max(64, W * 0.09);
+  const marginRight = 34;
+  const marginTop = 46;
+  const marginBottom = 62;
+  const gridWidth = W - marginLeft - marginRight;
+  const gridHeight = H - marginTop - marginBottom;
+  const cellWidth = gridWidth / cfg.columns;
+  const cellHeight = gridHeight / cfg.rows;
+  hwGridLayout = { left: marginLeft, top: marginTop, width: gridWidth, height: gridHeight,
+    rows: cfg.rows, columns: cfg.columns };
+
+  ctx.fillStyle = '#040810';
+  ctx.fillRect(0, 0, W, H);
+  ctx.font = `${Math.max(10, Math.min(14, cellWidth * 0.15))}px Share Tech Mono, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  let strongest = null;
+  for (let row = 0; row < cfg.rows; row++) {
+    for (let column = 0; column < cfg.columns; column++) {
+      const level = levels[row][column];
+      if (Number.isFinite(level) && (!strongest || level > strongest.level)) {
+        strongest = { row, column, level };
+      }
+      const displayRow = cfg.rows - 1 - row;
+      const x = marginLeft + column * cellWidth;
+      const y = marginTop + displayRow * cellHeight;
+      const normalized = Number.isFinite(level) ? (level - floor) / dynamicRange : 0;
+      ctx.fillStyle = Number.isFinite(level) ? hwHeatColor(normalized) : '#11151a';
+      ctx.fillRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
+      ctx.strokeStyle = 'rgba(255,170,80,0.25)';
+      ctx.strokeRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
+      if (cellWidth > 54 && cellHeight > 32 && Number.isFinite(level)) {
+        ctx.fillStyle = normalized > 0.65 ? '#160a02' : '#ffcc99';
+        ctx.fillText(level.toFixed(1), x + cellWidth / 2, y + cellHeight / 2);
+      }
+    }
+  }
+
+  ctx.fillStyle = '#ffcc99';
+  for (let column = 0; column < cfg.columns; column++) {
+    if (!Number.isFinite(azimuths[column])) continue;
+    const x = marginLeft + (column + 0.5) * cellWidth;
+    ctx.fillText(`${azimuths[column].toFixed(1)}°`, x, H - marginBottom / 2);
+  }
+  ctx.textAlign = 'right';
+  for (let row = 0; row < cfg.rows; row++) {
+    if (!Number.isFinite(elevations[row])) continue;
+    const displayRow = cfg.rows - 1 - row;
+    const y = marginTop + (displayRow + 0.5) * cellHeight;
+    ctx.fillText(`${elevations[row].toFixed(1)}°`, marginLeft - 10, y);
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#b89878';
+  ctx.fillText('AZIMUTH', marginLeft + gridWidth / 2, H - 10);
+  ctx.save();
+  ctx.translate(16, marginTop + gridHeight / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('ELEVATION', 0, 0);
+  ctx.restore();
+
+  const drawMarker = (marker, color, width, inset) => {
+    if (!marker) return;
+    const displayRow = cfg.rows - 1 - marker.row;
+    const x = marginLeft + marker.column * cellWidth;
+    const y = marginTop + displayRow * cellHeight;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.strokeRect(x + inset, y + inset, cellWidth - inset * 2, cellHeight - inset * 2);
+  };
+  drawMarker(strongest, '#ffffff', 1.5, 5);
+  drawMarker(frame.last_steer, '#6bcfff', 2.5, 3);
+  drawMarker(frame.target, '#5fd28a', 3.5, 1);
+}
+
 // -- Metrics panel --
 function computeHwEngMetrics(powers, angles, peakIdx) {
   const N = powers.length;
@@ -2169,6 +2248,32 @@ function computeHwEngMetrics(powers, angles, peakIdx) {
 function renderHwMetrics(frame) {
   const el = document.getElementById('hwMetrics');
   if (!el) return;
+  if (frame.configuration) {
+    const az = Number.isFinite(frame.est_az_deg) ? `${frame.est_az_deg.toFixed(1)}°` : '—';
+    const elevation = Number.isFinite(frame.est_el_deg) ? `${frame.est_el_deg.toFixed(1)}°` : '—';
+    const fixedBeamLevel = hwFixedBeamLevel(frame);
+    const displayedLevel = hwMonitoring && Number.isFinite(fixedBeamLevel) ? fixedBeamLevel : frame.argmax_db;
+    const db = Number.isFinite(displayedLevel) ? `${displayedLevel.toFixed(1)} dBFS` : '—';
+    const rate = Number.isFinite(frame.scan_rate_hz) ? `${frame.scan_rate_hz.toFixed(2)} Hz` : '—';
+    const targetState = hwMonitoring ? 'MONITORING' : (frame.target ? 'LOCKED' : frame.firmware_mode);
+    const azimuthEdges = frame.azimuth_deg.length ? hwAngularEdges(frame.azimuth_deg, 10) : [];
+    const elevationEdges = frame.elevation_deg.length ? hwAngularEdges(frame.elevation_deg, 10) : [];
+    const azimuthFov = azimuthEdges.length
+      ? `${azimuthEdges[0].toFixed(1)}°..${azimuthEdges.at(-1).toFixed(1)}°` : '—';
+    const elevationFov = elevationEdges.length
+      ? `${elevationEdges[0].toFixed(1)}°..${elevationEdges.at(-1).toFixed(1)}°` : '—';
+    el.innerHTML =
+      `<span style="color:#d94b00;font-weight:600">HEIMDALL ${targetState}</span><br>` +
+      `Direction: <span style="color:#ff8833">${az}, ${elevation}</span><br>` +
+      `${hwMonitoring ? 'Beam level' : 'Peak'}: <span style="color:#ffcc66">${db}</span>` +
+      `${hwMonitoring ? '' : ` · Δ${frame.margin_db.toFixed(1)} dB`}<br>` +
+      `Grid: ${frame.configuration.rows} × ${frame.configuration.columns} · ` +
+      `${frame.configuration.sectors} sectors<br>` +
+      `FOV: az ${azimuthFov} · el ${elevationFov}<br>` +
+      `Full-scan rate: <span style="color:#ffcc66">${rate}</span><br>` +
+      `Pass #${frame.scan_count} · protocol errors ${frame.protocol_errors}`;
+    return;
+  }
   const az = String(frame.est_az_deg).padStart(3, '\u00a0');
   const db = String(frame.argmax_db).padStart(6, '\u00a0');
   const margin = String(frame.margin_db).padStart(5, '\u00a0');
@@ -2194,6 +2299,73 @@ function renderHwMetrics(frame) {
     `(${db} dB, Δ${margin} dB)<br>` +
     `Scan rate: <span style="color:#ffcc66">${rate} Hz</span><br>` +
     `Frame #${fnum} · t=${t}s` + engLine;
+}
+
+function hwFixedBeamLevel(frame) {
+  const steer = frame?.last_steer;
+  if (!steer || !frame.levels_db?.[steer.row]) return null;
+  const level = frame.levels_db[steer.row][steer.column];
+  return Number.isFinite(level) ? level : null;
+}
+
+function renderHwTimeline2d() {
+  const canvas = document.getElementById('hwTimelineCanvas');
+  if (!canvas || hwPowerHistory.length < 2) return;
+  canvas.width = canvas.clientWidth;
+  canvas.height = canvas.clientHeight;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#0a0604';
+  ctx.fillRect(0, 0, W, H);
+  const history = hwPowerHistory.slice(-Math.max(2, Math.floor(W)));
+  const azValues = hwLastFrame?.azimuth_deg || [];
+  const elValues = hwLastFrame?.elevation_deg || [];
+  const azMin = Math.min(...azValues), azMax = Math.max(...azValues);
+  const elMin = Math.min(...elValues), elMax = Math.max(...elValues);
+
+  ctx.lineWidth = 1.5;
+  for (const [key, minimum, maximum, color] of [
+    ['azimuth', azMin, azMax, '#ff6600'],
+    ['elevation', elMin, elMax, '#5fd28a'],
+  ]) {
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    history.forEach((item, index) => {
+      const value = item[key];
+      if (!Number.isFinite(value) || !Number.isFinite(minimum) || maximum === minimum) return;
+      const x = index / Math.max(1, history.length - 1) * W;
+      const y = H - 14 - ((value - minimum) / (maximum - minimum)) * (H - 28);
+      if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  const levelValues = history.map(item => item.level).filter(Number.isFinite);
+  if (levelValues.length > 1) {
+    const levelMax = Math.max(...levelValues);
+    const levelMin = Math.min(...levelValues);
+    const levelRange = Math.max(3, levelMax - levelMin);
+    ctx.strokeStyle = '#ffdd66';
+    ctx.lineWidth = hwMonitoring ? 2.5 : 1.2;
+    ctx.beginPath();
+    let started = false;
+    history.forEach((item, index) => {
+      if (!Number.isFinite(item.level)) return;
+      const x = index / Math.max(1, history.length - 1) * W;
+      const y = H - 14 - ((item.level - levelMin) / levelRange) * (H - 28);
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  ctx.font = '10px Share Tech Mono, monospace';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ff6600';
+  ctx.fillText('AZ', 8, 11);
+  ctx.fillStyle = '#5fd28a';
+  ctx.fillText('EL', 30, 11);
+  ctx.fillStyle = '#ffdd66';
+  ctx.fillText(hwMonitoring ? 'FIXED BEAM LEVEL' : 'LEVEL', 52, 11);
 }
 
 // -- Timeline strip --
@@ -2322,11 +2494,13 @@ function renderHwSonar() {
 // -- Header bar time update --
 function updateHwHeader(frame) {
   const timeEl = document.getElementById('hbTime');
+  const arrayEl = document.getElementById('hbArray');
   const portEl = document.getElementById('hbPort');
   const statusEl = document.getElementById('hbStatus');
   if (timeEl) timeEl.textContent = new Date().toISOString().slice(11, 19) + 'Z';
-  if (portEl && hwInit) portEl.textContent = hwInit.port || 'COM?';
-  if (statusEl) statusEl.textContent = frame ? 'TRACKING' : 'IDLE';
+  if (arrayEl && frame.configuration) arrayEl.textContent = `${frame.configuration.microphones} MIC · ${frame.configuration.rows}×${frame.configuration.columns}`;
+  if (portEl) portEl.textContent = frame.transport || '--';
+  if (statusEl) statusEl.textContent = frame.target ? 'LOCKED' : (frame.firmware_mode || 'IDLE');
 }
 
 // -- 3D beam pattern mesh (torus or sphere, selectable) --
@@ -2601,6 +2775,18 @@ function updateHw3dRing(frame) {
   sourceGroup.visible = false;
   roomGroup.visible = false;
 
+  if (frame.levels_db && frame.configuration) {
+    buildHardwareSectorMesh(frame);
+    steerGroup.clear();
+    if (Number.isFinite(frame.true_az_deg) && Number.isFinite(frame.true_el_deg)) {
+      const radius = parseFloat(document.getElementById('dispRadius')?.value || 2.0) * 1.2;
+      renderTrueDir(frame.true_az_deg * Math.PI / 180, frame.true_el_deg * Math.PI / 180, radius * 0.9);
+    } else {
+      trueDirGroup.clear();
+    }
+    return;
+  }
+
   const scan = frame.beam_scan;
   if (!scan || !scan.powers_db) return;
 
@@ -2621,14 +2807,134 @@ function updateHw3dRing(frame) {
   }
 }
 
-// -- Hardware controls event handlers --
-document.getElementById('hwAvg').addEventListener('input', (e) => {
-  document.getElementById('hwAvgVal').textContent = e.target.value;
-  hwSend({ type: 'set_avg', avg: parseInt(e.target.value) });
-});
+function buildHardwareSectorMesh(frame) {
+  hwRingGroup.clear();
+  const levels = frame.levels_db;
+  const finite = levels.flat().filter(Number.isFinite);
+  const peak = finite.length ? Math.max(...finite) : 0;
+  const dynamicRange = Math.abs(parseFloat(document.getElementById('hwDbFloor').value) || -40);
+  const floor = peak - dynamicRange;
+  const radius = parseFloat(document.getElementById('dispRadius')?.value || 2.0);
+  const opacity = parseFloat(document.getElementById('opacity')?.value || 0.7);
+  const azimuthEdges = hwAngularEdges(frame.azimuth_deg, 10);
+  const elevationEdges = hwAngularEdges(frame.elevation_deg, 10).map(value => Math.max(-90, Math.min(90, value)));
+  const vertices = [];
+  const colors = [];
+  const indices = [];
+  const gridVertices = [];
+  let strongest = null;
 
+  const sphericalPoint = (azimuthDeg, elevationDeg, pointRadius) => {
+    const azimuth = azimuthDeg * Math.PI / 180;
+    const elevation = elevationDeg * Math.PI / 180;
+    return new THREE.Vector3(
+      pointRadius * Math.cos(elevation) * Math.cos(azimuth),
+      pointRadius * Math.sin(elevation),
+      pointRadius * Math.cos(elevation) * Math.sin(azimuth),
+    );
+  };
+
+  for (let row = 0; row < frame.configuration.rows; row++) {
+    for (let column = 0; column < frame.configuration.columns; column++) {
+      const level = levels[row][column];
+      const measured = Number.isFinite(level);
+      const value = measured ? Math.max(0, Math.min(1, (level - floor) / dynamicRange)) : 0;
+      if (measured && (!strongest || level > strongest.level)) strongest = {row, column, level};
+
+      // Stronger incoming energy pulls the tile slightly inward toward the array.
+      const tileRadius = radius * (1.0 - 0.12 * value);
+      const corners = [
+        sphericalPoint(azimuthEdges[column], elevationEdges[row], tileRadius),
+        sphericalPoint(azimuthEdges[column + 1], elevationEdges[row], tileRadius),
+        sphericalPoint(azimuthEdges[column + 1], elevationEdges[row + 1], tileRadius),
+        sphericalPoint(azimuthEdges[column], elevationEdges[row + 1], tileRadius),
+      ];
+      const base = vertices.length / 3;
+      const color = new THREE.Color(measured ? hwHeatColor(value) : '#11151a');
+      for (const corner of corners) {
+        vertices.push(corner.x, corner.y, corner.z);
+        colors.push(color.r, color.g, color.b);
+      }
+      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      for (let edge = 0; edge < 4; edge++) {
+        const first = corners[edge], second = corners[(edge + 1) % 4];
+        gridVertices.push(first.x, first.y, first.z, second.x, second.y, second.z);
+      }
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  hwRingGroup.add(new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: Math.max(0.25, opacity),
+    side: THREE.DoubleSide,
+    shininess: 25,
+    emissive: 0x160700,
+    emissiveIntensity: 0.35,
+  })));
+
+  const gridGeometry = new THREE.BufferGeometry();
+  gridGeometry.setAttribute('position', new THREE.Float32BufferAttribute(gridVertices, 3));
+  hwRingGroup.add(new THREE.LineSegments(gridGeometry, new THREE.LineBasicMaterial({
+    color: 0xff9a4d, transparent: true, opacity: 0.34,
+  })));
+
+  const focus = frame.target || frame.last_steer || strongest;
+  if (focus) {
+    const focusPoint = sphericalPoint(frame.azimuth_deg[focus.column], frame.elevation_deg[focus.row], radius * 1.04);
+    const inward = focusPoint.clone().multiplyScalar(-1).normalize();
+    const arrowColor = frame.target ? 0x5fd28a : (frame.last_steer ? 0x6bcfff : 0xffffff);
+    hwRingGroup.add(new THREE.ArrowHelper(inward, focusPoint, radius * 0.86, arrowColor,
+      radius * 0.08, radius * 0.045));
+    const sourceMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 0.035, 16, 12),
+      new THREE.MeshBasicMaterial({color: arrowColor}),
+    );
+    sourceMarker.position.copy(focusPoint);
+    hwRingGroup.add(sourceMarker);
+    hwRingGroup.add(hwSectorOutline(
+      azimuthEdges[focus.column], azimuthEdges[focus.column + 1],
+      elevationEdges[focus.row], elevationEdges[focus.row + 1],
+      radius * 0.985, arrowColor, sphericalPoint,
+    ));
+  }
+}
+
+function hwAngularEdges(centers, fallbackHalfSpan) {
+  if (centers.length === 1) return [centers[0] - fallbackHalfSpan, centers[0] + fallbackHalfSpan];
+  const edges = [centers[0] - (centers[1] - centers[0]) / 2];
+  for (let index = 0; index < centers.length - 1; index++) {
+    edges.push((centers[index] + centers[index + 1]) / 2);
+  }
+  edges.push(centers[centers.length - 1] + (centers[centers.length - 1] - centers[centers.length - 2]) / 2);
+  return edges;
+}
+
+function hwSectorOutline(azimuthLow, azimuthHigh, elevationLow, elevationHigh,
+                         radius, color, sphericalPoint) {
+  const corners = [
+    sphericalPoint(azimuthLow, elevationLow, radius),
+    sphericalPoint(azimuthHigh, elevationLow, radius),
+    sphericalPoint(azimuthHigh, elevationHigh, radius),
+    sphericalPoint(azimuthLow, elevationHigh, radius),
+  ];
+  const points = [];
+  for (let edge = 0; edge < 4; edge++) points.push(corners[edge], corners[(edge + 1) % 4]);
+  return new THREE.LineSegments(
+    new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({color, transparent: true, opacity: 1}),
+  );
+}
+
+// -- Hardware controls event handlers --
 document.getElementById('hwDbFloor').addEventListener('input', (e) => {
   document.getElementById('hwDbFloorVal').textContent = e.target.value;
+  hwNeedsRedraw = true;
 });
 
 document.getElementById('hwCrtToggle').addEventListener('change', (e) => {
@@ -2648,10 +2954,12 @@ document.getElementById('hwViewMode').addEventListener('change', () => {
     canvas2d.style.display = 'none';
     document.body.classList.add('hardware-3d-active', 'hardware-3d-only');
     hwRingGroup.visible = true;
+    frameHardwareDome();
   } else { // split
     canvas2d.style.display = 'block';
     document.body.classList.add('hardware-3d-active', 'hardware-split');
     hwRingGroup.visible = true;
+    frameHardwareDome();
   }
   // Resize Three.js renderer to new viewport
   setTimeout(() => {
@@ -2663,6 +2971,14 @@ document.getElementById('hwViewMode').addEventListener('change', () => {
     }
   }, 50);
 });
+
+function frameHardwareDome() {
+  const radius = parseFloat(document.getElementById('dispRadius')?.value || 2.0);
+  camera.position.set(-radius * 2.35, radius * 1.15, radius * 2.0);
+  controls.target.set(radius * 0.32, 0, 0);
+  camera.lookAt(controls.target);
+  controls.update();
+}
 
 document.getElementById('hwTrueEnable').addEventListener('change', (e) => {
   const enabled = e.target.checked;
@@ -2699,46 +3015,139 @@ document.getElementById('btnHwPause').addEventListener('click', () => {
   hwSend({ type: hwPaused ? 'pause' : 'resume' });
 });
 
-// Serial port connect button (Electron IPC or direct server restart)
 document.getElementById('btnHwConnect').addEventListener('click', async () => {
   const port = document.getElementById('hwSerialPort').value.trim();
   if (!port) { alert('Enter a serial port (e.g. COM18)'); return; }
+  const baud = parseInt(document.getElementById('hwSerialBaud').value);
   const statusEl = document.getElementById('hwStatus');
-  statusEl.textContent = `Restarting server with ${port}...`;
+  statusEl.textContent = `Connecting ${port}...`;
   try {
-    if (window.electronAPI) {
-      // Running in Electron — restart the embedded server with the serial port
-      await window.electronAPI.startServer(port);
-      statusEl.textContent = `Server starting with ${port}... (please wait)`;
-    } else {
-      // Running in browser — just inform user
-      statusEl.textContent = `Start sim_server.py --serial-port ${port} manually`;
-      return;
-    }
-    // Poll until server is responsive, then connect hardware WS
-    let attempts = 0;
-    const maxAttempts = 20; // 20 x 1s = 20 seconds max wait
-    const pollInterval = setInterval(async () => {
-      attempts++;
-      try {
-        const r = await fetch('http://127.0.0.1:8766/hw_status');
-        if (r.ok) {
-          clearInterval(pollInterval);
-          statusEl.textContent = `Server ready. Connecting to ${port}...`;
-          startHardwareSession();
-        }
-      } catch (_) {
-        if (attempts >= maxAttempts) {
-          clearInterval(pollInterval);
-          statusEl.textContent = `Server failed to start. Check COM port.`;
-        } else {
-          statusEl.textContent = `Waiting for server... (${attempts}s)`;
-        }
-      }
-    }, 1000);
+    const response = await fetch('http://127.0.0.1:8766/hw_connect', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({transport: 'serial', port, baud}),
+    });
+    if (!response.ok) throw new Error((await response.json()).detail || 'connection failed');
+    startHardwareSession();
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }
+});
+
+document.getElementById('btnHwEmulator').addEventListener('click', async () => {
+  const statusEl = document.getElementById('hwStatus');
+  statusEl.textContent = 'Starting emulator...';
+  try {
+    const emulatorConfig = {
+      rows: parseInt(document.getElementById('hwEmRows').value),
+      columns: parseInt(document.getElementById('hwEmColumns').value),
+      azimuth_min_deg: parseFloat(document.getElementById('hwEmAzMin').value),
+      azimuth_max_deg: parseFloat(document.getElementById('hwEmAzMax').value),
+      elevation_min_deg: parseFloat(document.getElementById('hwEmElMin').value),
+      elevation_max_deg: parseFloat(document.getElementById('hwEmElMax').value),
+    };
+    const response = await fetch('http://127.0.0.1:8766/hw_connect', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({transport: 'emulator', ...emulatorConfig}),
+    });
+    if (!response.ok) throw new Error((await response.json()).detail || 'emulator failed');
+    startHardwareSession();
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
+document.getElementById('btnHwDisconnect').addEventListener('click', async () => {
+  try {
+    await fetch('http://127.0.0.1:8766/hw_disconnect', {method: 'POST'});
+  } finally {
+    stopHardwareSession();
+    document.getElementById('hwStatus').textContent = 'Disconnected';
+  }
+});
+
+for (const [buttonId, command] of [
+  ['btnHwOnce', 'F'], ['btnHwContinuous', 'C'], ['btnHwAdaptive', 'G'], ['btnHwStop', 'X'],
+]) {
+  document.getElementById(buttonId).addEventListener('click', () => {
+    stopHwMonitor();
+    hwSend({type: 'command', command});
+  });
+}
+
+document.getElementById('btnHwSteer').addEventListener('click', () => {
+  stopHwMonitor();
+  const sector = parseInt(document.getElementById('hwSector').value);
+  if (!Number.isInteger(sector) || sector < 0 || (hwInit?.configuration && sector >= hwInit.configuration.sectors)) {
+    document.getElementById('hwStatus').textContent = 'Invalid sector';
+    return;
+  }
+  hwSend({type: 'command', command: `S,${sector}`});
+});
+
+document.getElementById('btnHwMeasure').addEventListener('click', () => {
+  hwSend({type: 'command', command: 'M'});
+});
+
+document.getElementById('btnHwMonitor').addEventListener('click', () => {
+  if (hwMonitoring) {
+    stopHwMonitor();
+    return;
+  }
+  const sector = parseInt(document.getElementById('hwSector').value);
+  if (!Number.isInteger(sector) || sector < 0 ||
+      (hwInit?.configuration && sector >= hwInit.configuration.sectors)) {
+    document.getElementById('hwStatus').textContent = 'Invalid sector';
+    return;
+  }
+  if (!hwWs || hwWs.readyState !== WebSocket.OPEN) {
+    document.getElementById('hwStatus').textContent = 'Connect hardware or emulator first';
+    return;
+  }
+  hwSend({type: 'command', command: `S,${sector}`});
+  hwMonitoring = true;
+  const button = document.getElementById('btnHwMonitor');
+  button.textContent = 'Stop Monitor';
+  button.classList.add('active');
+  restartHwMonitorTimer();
+});
+
+document.getElementById('hwMonitorRate').addEventListener('change', () => {
+  if (hwMonitoring) restartHwMonitorTimer();
+});
+
+function restartHwMonitorTimer() {
+  if (hwMonitorTimer) clearInterval(hwMonitorTimer);
+  const rate = Math.max(1, parseInt(document.getElementById('hwMonitorRate').value) || 20);
+  hwMonitorTimer = setInterval(() => hwSend({type: 'command', command: 'M'}), 1000 / rate);
+}
+
+function stopHwMonitor() {
+  hwMonitoring = false;
+  if (hwMonitorTimer) clearInterval(hwMonitorTimer);
+  hwMonitorTimer = null;
+  const button = document.getElementById('btnHwMonitor');
+  if (button) {
+    button.textContent = 'Monitor Beam';
+    button.classList.remove('active');
+  }
+}
+
+let hwGridLayout = null;
+document.getElementById('hwBirdsEye').addEventListener('click', (event) => {
+  if (!hwGridLayout) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const x = (event.clientX - rect.left) * dpr;
+  const y = (event.clientY - rect.top) * dpr;
+  if (x < hwGridLayout.left || x >= hwGridLayout.left + hwGridLayout.width ||
+      y < hwGridLayout.top || y >= hwGridLayout.top + hwGridLayout.height) return;
+  const column = Math.floor((x - hwGridLayout.left) / hwGridLayout.width * hwGridLayout.columns);
+  const displayRow = Math.floor((y - hwGridLayout.top) / hwGridLayout.height * hwGridLayout.rows);
+  const row = hwGridLayout.rows - 1 - displayRow;
+  const sector = row * hwGridLayout.columns + column;
+  stopHwMonitor();
+  document.getElementById('hwSector').value = sector;
+  hwSend({type: 'command', command: `S,${sector}`});
 });
 
 // Check hardware availability on load and auto-show tab if available

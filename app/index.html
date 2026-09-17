@@ -417,10 +417,53 @@
         <button type="button" id="btnHwConnect" class="mat-preset-btn" style="width:auto;padding:4px 10px;margin:0;">Connect</button>
       </div>
     </div>
-    <div id="hwStatus" class="rt-status">Checking hardware...</div>
     <div class="ctrl-row">
-      <label>Averaging: <span id="hwAvgVal">4</span> scans</label>
-      <input type="range" id="hwAvg" min="1" max="16" step="1" value="4">
+      <label>Baud</label>
+      <select id="hwSerialBaud">
+        <option value="921600" selected>921600</option>
+        <option value="115200">115200</option>
+      </select>
+    </div>
+    <div class="hw-command-grid">
+      <button type="button" id="btnHwEmulator" class="mat-preset-btn">Start Emulator</button>
+      <button type="button" id="btnHwDisconnect" class="mat-preset-btn">Disconnect</button>
+    </div>
+    <details class="advanced-settings hw-emulator-settings">
+      <summary>Emulator Grid</summary>
+      <div class="hw-emulator-grid">
+        <label>Rows<input type="number" id="hwEmRows" min="1" max="20" value="7"></label>
+        <label>Columns<input type="number" id="hwEmColumns" min="1" max="20" value="7"></label>
+        <label>Az min<input type="number" id="hwEmAzMin" min="-90" max="89" step="1" value="-70"></label>
+        <label>Az max<input type="number" id="hwEmAzMax" min="-89" max="90" step="1" value="70"></label>
+        <label>El min<input type="number" id="hwEmElMin" min="-90" max="89" step="1" value="-60"></label>
+        <label>El max<input type="number" id="hwEmElMax" min="-89" max="90" step="1" value="60"></label>
+      </div>
+    </details>
+    <div id="hwStatus" class="rt-status">Checking hardware...</div>
+    <div class="hw-command-grid">
+      <button type="button" id="btnHwOnce" class="mat-preset-btn">Full Sweep</button>
+      <button type="button" id="btnHwContinuous" class="mat-preset-btn">Continuous</button>
+      <button type="button" id="btnHwAdaptive" class="mat-preset-btn">Track</button>
+      <button type="button" id="btnHwStop" class="mat-preset-btn">Stop</button>
+    </div>
+    <div class="ctrl-row">
+      <label>Sector</label>
+      <div style="display:flex;gap:4px;">
+        <input type="number" id="hwSector" min="0" value="24" style="flex:1;">
+        <button type="button" id="btnHwSteer" class="mat-preset-btn" style="width:auto;padding:4px 10px;margin:0;">Steer</button>
+        <button type="button" id="btnHwMeasure" class="mat-preset-btn" style="width:auto;padding:4px 10px;margin:0;">Measure Once</button>
+      </div>
+    </div>
+    <div class="ctrl-row">
+      <label>Fixed-beam rate</label>
+      <div style="display:flex;gap:4px;">
+        <select id="hwMonitorRate" style="flex:1;">
+          <option value="10">10 Hz</option>
+          <option value="20" selected>20 Hz</option>
+          <option value="50">50 Hz</option>
+        </select>
+        <button type="button" id="btnHwMonitor" class="mat-preset-btn" style="width:auto;padding:4px 10px;margin:0;">Monitor Beam</button>
+      </div>
     </div>
     <div class="ctrl-row">
       <label>dB Floor: <span id="hwDbFloorVal">-40</span> dB</label>
@@ -429,18 +472,9 @@
     <div class="ctrl-row">
       <label>View</label>
       <select id="hwViewMode">
-        <option value="2d">2D Polar</option>
+        <option value="2d" selected>2D Heatmap</option>
         <option value="3d">3D Visualiser</option>
-        <option value="split" selected>Split (2D + 3D)</option>
-      </select>
-    </div>
-    <div class="ctrl-row">
-      <label>3D Shape</label>
-      <select id="hw3dShape">
-        <option value="torus" selected>Torus</option>
-        <option value="sphere">Sphere</option>
-        <option value="particles">Particles</option>
-        <option value="bars">Bar Chart</option>
+        <option value="split">Split (2D + 3D)</option>
       </select>
     </div>
     <hr style="border-color:#333;margin:8px 0">
@@ -556,7 +590,7 @@
 <div id="hwHeaderBar" class="hidden">
   <span>UTC: <span id="hbTime">--:--:--</span></span>
   <span class="hb-sep">|</span>
-  <span>ARRAY: MICCANVAS-15</span>
+  <span>ARRAY: <span id="hbArray">--</span></span>
   <span class="hb-sep">|</span>
   <span>PORT: <span id="hbPort">--</span></span>
   <span class="hb-sep">|</span>
