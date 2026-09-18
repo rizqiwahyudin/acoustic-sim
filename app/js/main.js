@@ -538,7 +538,7 @@ function setMode(m) {
   } else if (m === 'hardware') {
     document.getElementById('btnHardware').classList.add('active');
     document.getElementById('hardwareControls').classList.remove('hidden');
-    startHardwareSession();
+    discoverHardwareTransport();
   }
   updateCustomArrayVisibility();
   renderCustomList();
@@ -1657,6 +1657,13 @@ function animate() {
   requestAnimationFrame(animate);
 
   if (mode === 'hardware' && hwLastFrame) {
+    const now = performance.now();
+    if (now - hwLastUiTick > 500) {
+      hwLastUiTick = now;
+      updateHwReadiness(hwLastFrame);
+      renderHwSolution(hwLastFrame);
+      hwNeedsRedraw = true;
+    }
     if (hwNeedsRedraw) {
       hwNeedsRedraw = false;
       drawHwBirdsEye(hwLastFrame);
@@ -1676,6 +1683,10 @@ function animate() {
 animate();
 
 window.addEventListener('resize', () => {
+  if (mode === 'hardware') {
+    resizeHardwareViews();
+    return;
+  }
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -1692,6 +1703,17 @@ const HW_HISTORY_MAX = 500;
 let hwPaused = false;
 let hwMonitoring = false;
 let hwMonitorTimer = null;
+let hwConnectionState = 'disconnected';
+let hwCellTimestamps = [];
+let hwEventLog = [];
+let hwLastLoggedSequence = -1;
+let hwLastTargetSector = null;
+let hwLastUiTick = 0;
+let hwAcousticCacheId = null;
+let hwAcousticPollTimer = null;
+let hwAuditionUrls = {};
+const HW_EVENT_LOG_MAX = 50;
+const HW_STALE_MS = 5000;
 
 // -- Interpolation state for 60 FPS smooth animation --
 let hwNeedsRedraw = false;
@@ -1706,6 +1728,310 @@ let hwJetParticles = []; // {x,y,z, vx,vy,vz, life, maxLife, r,g,b}
 const HW_JET_MAX = 300;
 let hwJetPoints = null;
 let hwJetGeo = null;
+
+function hwTransportOpen() {
+  return Boolean(hwWs && hwWs.readyState === WebSocket.OPEN);
+}
+
+function setHwConnectionState(state, detail) {
+  hwConnectionState = state;
+  const link = document.getElementById('hbLink');
+  if (link) {
+    link.className = `hw-state ${state}`;
+    link.textContent = state === 'online' ? 'ONLINE'
+      : state === 'connecting' ? 'CONNECTING'
+      : state === 'fault' ? 'FAULT' : 'OFFLINE';
+  }
+  if (detail) document.getElementById('hwStatus').textContent = detail;
+  if (state === 'disconnected') {
+    document.getElementById('hbPort').textContent = '--';
+    document.getElementById('hbArray').textContent = '--';
+    document.getElementById('hbStatus').textContent = 'IDLE';
+    document.getElementById('hbAge').textContent = '--';
+    document.getElementById('hbWarnings').textContent = '0';
+  }
+  syncHwControls();
+}
+
+function syncHwControls() {
+  const linkOpen = hwTransportOpen() && hwConnectionState === 'online';
+  const ready = linkOpen && Boolean(hwInit?.configuration);
+  for (const id of ['btnHwOnce', 'btnHwContinuous', 'btnHwAdaptive', 'btnHwSteer', 'btnHwMonitor']) {
+    const control = document.getElementById(id);
+    if (control) control.disabled = !ready;
+  }
+  for (const id of ['btnHwStop', 'btnHwPause']) {
+    const control = document.getElementById(id);
+    if (control) control.disabled = !linkOpen;
+  }
+  for (const id of ['btnHwConnect', 'btnHwEmulator']) {
+    const control = document.getElementById(id);
+    if (control) control.disabled = hwConnectionState === 'connecting' || linkOpen;
+  }
+  document.getElementById('btnHwDisconnect').disabled = !hwTransportOpen();
+
+  const activeMode = hwLastFrame?.firmware_mode;
+  document.getElementById('btnHwOnce').classList.toggle('active', activeMode === 'F');
+  document.getElementById('btnHwContinuous').classList.toggle('active', activeMode === 'C');
+  document.getElementById('btnHwAdaptive').classList.toggle('active', activeMode === 'G');
+}
+
+function addHwEvent(kind, detail, tone = '') {
+  const previous = hwEventLog.at(-1);
+  if (previous && previous.kind === kind && previous.detail === detail) return;
+  hwEventLog.push({time: new Date(), kind, detail, tone});
+  if (hwEventLog.length > HW_EVENT_LOG_MAX) hwEventLog.shift();
+  renderHwEventLog();
+}
+
+function renderHwEventLog() {
+  const log = document.getElementById('hwEventLog');
+  if (!log) return;
+  log.replaceChildren();
+  if (hwEventLog.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'hw-event-empty';
+    empty.textContent = 'No session events';
+    log.appendChild(empty);
+    return;
+  }
+  for (const event of [...hwEventLog].reverse()) {
+    const row = document.createElement('div');
+    row.className = `hw-event ${event.tone}`.trim();
+    const time = document.createElement('span');
+    time.className = 'hw-event-time';
+    time.textContent = event.time.toLocaleTimeString([], {hour12: false});
+    const kind = document.createElement('span');
+    kind.className = 'hw-event-kind';
+    kind.textContent = event.kind;
+    const detail = document.createElement('span');
+    detail.className = 'hw-event-detail';
+    detail.textContent = event.detail;
+    row.append(time, kind, detail);
+    log.appendChild(row);
+  }
+}
+
+function resetHwFreshness(configuration = null) {
+  hwCellTimestamps = configuration
+    ? Array.from({length: configuration.rows}, () => Array(configuration.columns).fill(null))
+    : [];
+}
+
+function updateHwCellTimestamps(frame, previousFrame) {
+  const configuration = frame.configuration;
+  if (!configuration) return;
+  if (hwCellTimestamps.length !== configuration.rows ||
+      hwCellTimestamps.some(row => row.length !== configuration.columns)) {
+    resetHwFreshness(configuration);
+  }
+  const receivedAt = Number.isFinite(frame.timestamp_s) ? frame.timestamp_s * 1000 : Date.now();
+  const record = frame.last_record;
+  if (record?.type === 'measurement' &&
+      hwCellTimestamps[record.row]?.[record.column] !== undefined) {
+    hwCellTimestamps[record.row][record.column] = receivedAt;
+  }
+  for (let row = 0; row < configuration.rows; row++) {
+    for (let column = 0; column < configuration.columns; column++) {
+      const value = frame.levels_raw?.[row]?.[column];
+      const previousValue = previousFrame?.levels_raw?.[row]?.[column];
+      if (value != null && value !== previousValue) hwCellTimestamps[row][column] = receivedAt;
+    }
+  }
+}
+
+function hwCellAgeMs(row, column) {
+  const timestamp = hwCellTimestamps[row]?.[column];
+  return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : null;
+}
+
+function formatHwAge(ageMs) {
+  if (!Number.isFinite(ageMs)) return '--';
+  if (ageMs < 1000) return `${Math.round(ageMs)} ms`;
+  if (ageMs < 60000) return `${(ageMs / 1000).toFixed(1)} s`;
+  return `${Math.floor(ageMs / 60000)}m ${Math.floor((ageMs % 60000) / 1000)}s`;
+}
+
+function hwStrongestObservation(frame) {
+  let strongest = null;
+  for (let row = 0; row < (frame.configuration?.rows || 0); row++) {
+    for (let column = 0; column < (frame.configuration?.columns || 0); column++) {
+      const level = frame.levels_db?.[row]?.[column];
+      if (Number.isFinite(level) && (!strongest || level > strongest.level)) {
+        strongest = {row, column, sector: row * frame.configuration.columns + column, level};
+      }
+    }
+  }
+  return strongest;
+}
+
+function hwSolution(frame) {
+  if (!frame?.configuration) return null;
+  let marker;
+  let label;
+  let stateClass;
+  if (frame.target) {
+    marker = frame.target;
+    label = 'TRACKED TARGET';
+    stateClass = 'locked';
+  } else if (frame.last_steer) {
+    marker = frame.last_steer;
+    label = hwMonitoring ? 'FIXED BEAM MONITOR' : 'FIXED BEAM';
+    stateClass = 'monitoring';
+  } else {
+    marker = hwStrongestObservation(frame);
+    label = marker ? 'STRONGEST OBSERVATION' : 'NO OBSERVATION';
+    stateClass = marker ? 'observation' : '';
+  }
+  if (!marker) return null;
+  const azimuth = Number.isFinite(marker.azimuth_deg)
+    ? marker.azimuth_deg : frame.azimuth_deg?.[marker.column];
+  const elevation = Number.isFinite(marker.elevation_deg)
+    ? marker.elevation_deg : frame.elevation_deg?.[marker.row];
+  const level = frame.levels_db?.[marker.row]?.[marker.column];
+  return {...marker, azimuth, elevation, level, label, stateClass,
+    ageMs: hwCellAgeMs(marker.row, marker.column)};
+}
+
+function renderHwSolution(frame) {
+  const state = document.getElementById('hwSolutionState');
+  const direction = document.getElementById('hwSolutionDirection');
+  const meta = document.getElementById('hwSolutionMeta');
+  if (!state || !direction || !meta) return;
+  renderHwTruth(frame);
+  const solution = hwSolution(frame);
+  if (!solution) {
+    state.className = 'hw-solution-state';
+    state.textContent = 'NO OBSERVATION';
+    direction.textContent = '--.-° / --.-°';
+    meta.textContent = 'Waiting for measurements';
+    renderHwRateComparison(frame);
+    return;
+  }
+  state.className = `hw-solution-state ${solution.stateClass}`.trim();
+  state.textContent = solution.label;
+  const azimuth = Number.isFinite(solution.azimuth) ? `${solution.azimuth.toFixed(1)}°` : '--.-°';
+  const elevation = Number.isFinite(solution.elevation) ? `${solution.elevation.toFixed(1)}°` : '--.-°';
+  direction.textContent = `${azimuth} / ${elevation}`;
+  const level = Number.isFinite(solution.level) ? `${solution.level.toFixed(1)} dBFS` : '--';
+  const margin = Number.isFinite(frame.margin_db) ? ` · peak-to-next ${frame.margin_db.toFixed(1)} dB` : '';
+  meta.textContent = `Sector ${solution.sector} · row ${solution.row}, column ${solution.column} · ${level}${margin} · age ${formatHwAge(solution.ageMs)}`;
+  renderHwRateComparison(frame);
+}
+
+function renderHwTruth(frame) {
+  const panel = document.getElementById('hwTruth');
+  const direction = document.getElementById('hwTruthDirection');
+  const meta = document.getElementById('hwTruthMeta');
+  const state = document.getElementById('hwTruthState');
+  if (!panel || !direction || !meta || !state) return;
+  const truth = frame?.emulator_truth;
+  panel.classList.toggle('hidden', !truth);
+  if (!truth) return;
+  const active = truth.source_active !== false;
+  state.textContent = active ? 'ACTIVE' : 'ACOUSTIC DROPOUT';
+  state.classList.toggle('dropout', !active);
+  direction.textContent = `${truth.azimuth_deg.toFixed(1)}° / ${truth.elevation_deg.toFixed(1)}°`;
+  const position = truth.room_position_m.map(value => value.toFixed(1)).join(', ');
+  const estimateError = Number.isFinite(frame.est_az_deg) && Number.isFinite(frame.est_el_deg)
+    ? ` · estimate error ${Math.hypot(frame.est_az_deg - truth.azimuth_deg, frame.est_el_deg - truth.elevation_deg).toFixed(1)}°`
+    : '';
+  meta.textContent = `Range ${truth.range_m.toFixed(1)} m · room [${position}] m · loop ${truth.loop_elapsed_s.toFixed(1)} s${estimateError}`;
+}
+
+function renderHwRateComparison(frame) {
+  const trackRateEl = document.getElementById('hwTrackRate');
+  const fullRateEl = document.getElementById('hwFullScanRate');
+  const gainEl = document.getElementById('hwRateGain');
+  if (!trackRateEl || !fullRateEl || !gainEl) return;
+
+  const fullRate = frame?.scan_rate_hz;
+  const trackRate = frame?.target_update_rate_hz;
+  const updateAge = frame?.target_update_age_s;
+  const trackCurrent = Number.isFinite(trackRate) && Number.isFinite(updateAge) && updateAge < 2.0;
+  trackRateEl.textContent = trackCurrent ? `${trackRate.toFixed(1)} Hz` : '--';
+  fullRateEl.textContent = Number.isFinite(fullRate) ? `${fullRate.toFixed(2)} Hz` : '--';
+
+  if (trackCurrent && Number.isFinite(fullRate) && fullRate > 0) {
+    gainEl.textContent = `${(trackRate / fullRate).toFixed(1)}× faster solution refresh · host observed`;
+    gainEl.classList.add('active');
+  } else if (frame?.firmware_mode === 'G' && frame?.target) {
+    gainEl.textContent = 'Local tracking update cadence settling';
+    gainEl.classList.remove('active');
+  } else if (frame?.firmware_mode === 'G') {
+    gainEl.textContent = 'Global search / confirmation in progress';
+    gainEl.classList.remove('active');
+  } else {
+    gainEl.textContent = 'Waiting for target lock';
+    gainEl.classList.remove('active');
+  }
+}
+
+function logHwRecord(frame) {
+  if (!Number.isFinite(frame.sequence) || frame.sequence === hwLastLoggedSequence) return;
+  hwLastLoggedSequence = frame.sequence;
+  const record = frame.last_record;
+  if (!record) return;
+  switch (record.type) {
+  case 'scan_started':
+    addHwEvent('MODE', `${record.mode} started`);
+    break;
+  case 'scan_done':
+    if (frame.firmware_mode === 'IDLE') addHwEvent('MODE', 'Full sweep complete');
+    break;
+  case 'scan_stopped':
+    addHwEvent('MODE', 'Stopped by operator', 'warning');
+    break;
+  case 'steer_ok':
+    addHwEvent('STEER', `Sector ${record.sector} · ${record.azimuth_deg.toFixed(1)}° / ${record.elevation_deg.toFixed(1)}°`);
+    break;
+  case 'target_acquired':
+    hwLastTargetSector = record.sector;
+    addHwEvent('TARGET', `Acquired sector ${record.sector}`, 'target');
+    break;
+  case 'target_updated':
+    if (record.sector !== hwLastTargetSector) {
+      hwLastTargetSector = record.sector;
+      addHwEvent('TARGET', `Moved to sector ${record.sector}`, 'target');
+    }
+    break;
+  case 'target_lost':
+    hwLastTargetSector = null;
+    addHwEvent('TARGET', `Lost from sector ${record.sector}`, 'warning');
+    break;
+  case 'steer_error':
+    addHwEvent('ERROR', `Steer failed at mic ${record.microphone} · code ${record.code}`, 'error');
+    break;
+  case 'error':
+    addHwEvent('ERROR', [record.reason, ...record.details].join(' · '), 'error');
+    break;
+  }
+}
+
+function logHwStateTransitions(frame, previousFrame) {
+  if (!previousFrame) return;
+  if (frame.scan_count > previousFrame.scan_count && frame.firmware_mode === 'IDLE') {
+    addHwEvent('MODE', `Full sweep complete · pass ${frame.scan_count}`);
+  }
+  const previousTarget = previousFrame.target;
+  const target = frame.target;
+  if (!previousTarget && target) {
+    hwLastTargetSector = target.sector;
+    addHwEvent('TARGET', `Acquired sector ${target.sector}`, 'target');
+  } else if (previousTarget && !target) {
+    hwLastTargetSector = null;
+    addHwEvent('TARGET', `Lock cleared from sector ${previousTarget.sector}`, 'warning');
+  } else if (target && target.sector !== previousTarget?.sector) {
+    hwLastTargetSector = target.sector;
+    addHwEvent('TARGET', `Moved to sector ${target.sector}`, 'target');
+  }
+  if (frame.last_steer?.sector !== previousFrame.last_steer?.sector && frame.last_steer) {
+    addHwEvent('STEER', `Sector ${frame.last_steer.sector} selected`);
+  }
+  if (frame.last_error && JSON.stringify(frame.last_error) !== JSON.stringify(previousFrame.last_error)) {
+    addHwEvent('ERROR', frame.last_error.reason || 'Hardware command failed', 'error');
+  }
+}
 
 function spawnJetParticles(peakAzRad, power01, dispRadius) {
   const count = Math.floor(3 + 8 * power01);
@@ -1754,93 +2080,178 @@ function updateJetParticles() {
   hwRingGroup.add(hwJetPoints);
 }
 
-function stopHardwareSession() {
-  stopHwMonitor();
-  if (hwWs) { hwWs.close(); hwWs = null; }
+function clearHardwarePresentation() {
   hwInit = null;
   hwLastFrame = null;
+  hwPaused = false;
+  hwLastLoggedSequence = -1;
+  hwLastTargetSector = null;
+  hwGridLayout = null;
+  resetHwFreshness();
   hwPowerHistory = [];
+  hwAfterglowHistory = [];
   hwNeedsRedraw = false;
   hwRingGroup.clear();
   hwArrayMarkerGroup.visible = false;
+  trueDirGroup.clear();
+  steerGroup.clear();
+  document.getElementById('hwMetrics').textContent = 'No active transport';
+  document.getElementById('hwStatsLine').textContent = 'No measurements received';
+  renderHwSolution(null);
+  updateHwGridSource();
+  for (const canvasId of ['hwBirdsEye', 'hwTimelineCanvas']) {
+    const canvas = document.getElementById(canvasId);
+    canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+function clearHwAudition() {
+  for (const url of Object.values(hwAuditionUrls)) URL.revokeObjectURL(url);
+  hwAuditionUrls = {};
+  const player = document.getElementById('hwAuditionPlayer');
+  if (player) player.removeAttribute('src');
+  document.getElementById('hwAuditionDownload')?.classList.add('hidden');
+  const status = document.getElementById('hwAuditionStatus');
+  if (status) status.textContent = 'No clip rendered';
+}
+
+function selectHwAuditionClip() {
+  const mode = document.getElementById('hwAuditionMode').value;
+  const url = hwAuditionUrls[mode];
+  if (!url) return;
+  const player = document.getElementById('hwAuditionPlayer');
+  player.src = url;
+  const download = document.getElementById('hwAuditionDownload');
+  download.href = url;
+  download.download = `heimdall-${mode}.wav`;
+  download.classList.remove('hidden');
+}
+
+function stopHardwareSession() {
+  stopHwMonitor();
+  if (hwWs) { hwWs.close(); hwWs = null; }
+  clearHardwarePresentation();
   hw3dActive = false;
   document.body.classList.remove('hardware-3d-active', 'hardware-split', 'hardware-3d-only');
-  // Hide hardware UI elements
+  const hardwareVisible = mode === 'hardware';
   document.getElementById('hwScanlines').classList.add('hidden');
-  document.getElementById('hwHeaderBar').classList.add('hidden');
+  document.getElementById('hwHeaderBar').classList.toggle('hidden', !hardwareVisible);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   beamGroup.visible = true;
   sourceGroup.visible = true;
   roomGroup.visible = true;
+  const freezeButton = document.getElementById('btnHwPause');
+  if (freezeButton) freezeButton.textContent = 'Freeze Display';
+  setHwConnectionState('disconnected', 'Disconnected');
 }
 
 function hwSend(obj) {
-  if (hwWs && hwWs.readyState === WebSocket.OPEN) hwWs.send(JSON.stringify(obj));
+  if (!hwTransportOpen()) {
+    document.getElementById('hwStatus').textContent = 'No active Hardware link';
+    return false;
+  }
+  hwWs.send(JSON.stringify(obj));
+  return true;
 }
 
 function startHardwareSession() {
   stopHardwareSession();
   resizeHwCanvas();
   // Show hardware UI elements
-  document.getElementById('hwScanlines').classList.remove('hidden');
+  document.getElementById('hwScanlines').classList.toggle(
+    'hidden', !document.getElementById('hwCrtToggle').checked);
   document.getElementById('hwHeaderBar').classList.remove('hidden');
-  const statusEl = document.getElementById('hwStatus');
-  statusEl.textContent = 'Connecting...';
+  setHwConnectionState('connecting', 'Connecting to Hardware service...');
 
-  hwWs = new WebSocket(HW_WS_URL);
-  hwWs.onopen = () => {
-    statusEl.textContent = 'Connected';
+  const socket = new WebSocket(HW_WS_URL);
+  hwWs = socket;
+  socket.onopen = () => {
+    if (hwWs !== socket) return;
+    setHwConnectionState('online', 'Link open · requesting firmware metadata');
+    addHwEvent('LINK', 'WebSocket connected');
     hwSend({ type: 'resume' });
+    hwSend({ type: 'set_true_dir', az_deg: null, el_deg: null });
     hwSend({ type: 'request_init' });
   };
-  hwWs.onmessage = (ev) => {
+  socket.onmessage = (ev) => {
+    if (hwWs !== socket) return;
     try { onHardwareMessage(JSON.parse(ev.data)); }
     catch (e) { console.warn('hw parse', e); }
   };
-  hwWs.onclose = () => {
+  socket.onclose = () => {
+    if (hwWs !== socket) return;
+    hwWs = null;
     stopHwMonitor();
-    if (mode === 'hardware') statusEl.textContent = 'Disconnected';
+    clearHardwarePresentation();
+    if (mode === 'hardware') {
+      setHwConnectionState('disconnected', 'Disconnected');
+      addHwEvent('LINK', 'Transport disconnected', 'warning');
+    }
   };
-  hwWs.onerror = () => {
-    statusEl.textContent = 'WebSocket error';
+  socket.onerror = () => {
+    if (hwWs !== socket) return;
+    setHwConnectionState('fault', 'Hardware WebSocket unavailable');
+    addHwEvent('ERROR', 'Hardware WebSocket unavailable', 'error');
   };
 }
 
 function onHardwareMessage(msg) {
   if (msg.type === 'init') {
+    const previousConfig = hwInit?.configuration;
     hwInit = msg;
     const cfg = msg.configuration;
-    document.getElementById('hwStatus').textContent = cfg
+    const changed = cfg && (!previousConfig || previousConfig.rows !== cfg.rows ||
+      previousConfig.columns !== cfg.columns || previousConfig.microphones !== cfg.microphones);
+    if (changed) resetHwFreshness(cfg);
+    setHwConnectionState('online', cfg
       ? `Connected · ${msg.transport} · ${cfg.rows} × ${cfg.columns} · ${cfg.microphones} mics`
-      : `Connected · ${msg.transport} · waiting for firmware info`;
+      : `Connected · ${msg.transport} · waiting for firmware info`);
     if (cfg) document.getElementById('hwSector').max = cfg.sectors - 1;
+    if (changed) addHwEvent('CONFIG', `${cfg.rows} × ${cfg.columns} · ${cfg.sectors} sectors · ${cfg.microphones} microphones`);
+    updateHwGridSource(msg);
+    updateHwReadiness(msg);
     return;
   }
   if (msg.type === 'frame') {
+    const previousFrame = hwLastFrame;
+    const telemetryAdvanced = msg.sequence !== previousFrame?.sequence;
+    if (telemetryAdvanced) updateHwCellTimestamps(msg, previousFrame);
     hwLastFrame = msg;
     if (!msg.connected) {
-      document.getElementById('hwStatus').textContent = `Disconnected · ${msg.transport}`;
+      setHwConnectionState('fault', `Link fault · ${msg.transport}`);
+    } else {
+      setHwConnectionState('online', `${msg.transport} · ${msg.configuration ? 'ready' : 'waiting for metadata'}`);
     }
+    if (telemetryAdvanced) {
+      logHwRecord(msg);
+      logHwStateTransitions(msg, previousFrame);
+    }
+    updateHwGridSource(msg);
     renderHwMetrics(msg);
+    renderHwSolution(msg);
+    updateHwReadiness(msg);
     if (msg.levels_db && msg.configuration) {
       hwNeedsRedraw = true;
-      hwSonarTargetAngle += Math.PI / Math.max(1, msg.configuration.sectors);
-      updateHwHeader(msg);
-      hwPowerHistory.push({
-        t: msg.timestamp_s,
-        azimuth: msg.est_az_deg,
-        elevation: msg.est_el_deg,
-        level: hwFixedBeamLevel(msg) ?? msg.argmax_db,
-      });
-      if (hwPowerHistory.length > HW_HISTORY_MAX) hwPowerHistory.shift();
-      renderHwTimeline2d();
+      if (telemetryAdvanced) hwSonarTargetAngle += Math.PI / Math.max(1, msg.configuration.sectors);
+      if (telemetryAdvanced && msg.last_record?.type === 'measurement') {
+        hwPowerHistory.push({
+          t: msg.timestamp_s,
+          azimuth: msg.est_az_deg,
+          elevation: msg.est_el_deg,
+          level: hwFixedBeamLevel(msg) ?? msg.argmax_db,
+        });
+        if (hwPowerHistory.length > HW_HISTORY_MAX) hwPowerHistory.shift();
+        renderHwTimeline2d();
+      }
     }
     return;
   }
   if (msg.type === 'command_error') {
-    document.getElementById('hwStatus').textContent = `Command error · ${msg.detail}`;
+    const detail = String(msg.detail || 'unknown command error');
+    document.getElementById('hwStatus').textContent = `Command error · ${detail}`;
+    addHwEvent('ERROR', detail, 'error');
   }
 }
 
@@ -1850,6 +2261,110 @@ function resizeHwCanvas() {
     const dpr = window.devicePixelRatio || 1;
     canvas2d.width = canvas2d.clientWidth * dpr;
     canvas2d.height = canvas2d.clientHeight * dpr;
+  }
+}
+
+function resizeHardwareViews() {
+  resizeHwCanvas();
+  const canvas3d = document.getElementById('canvas3d');
+  if (document.body.classList.contains('hardware-3d-active') && canvas3d.clientWidth > 0) {
+    camera.aspect = canvas3d.clientWidth / Math.max(1, canvas3d.clientHeight);
+    camera.updateProjectionMatrix();
+    renderer.setSize(canvas3d.clientWidth, canvas3d.clientHeight);
+    frameHardwareDome();
+  }
+  hwNeedsRedraw = true;
+}
+
+async function discoverHardwareTransport() {
+  document.getElementById('hwHeaderBar').classList.remove('hidden');
+  resizeHardwareViews();
+  setHwConnectionState('connecting', 'Checking Hardware service...');
+  try {
+    const response = await fetch('http://127.0.0.1:8766/hw_status');
+    if (!response.ok) throw new Error('Hardware service unavailable');
+    const status = await response.json();
+    if (status.available) {
+      startHardwareSession();
+    } else {
+      setHwConnectionState('disconnected', 'Backend ready · select serial or emulator');
+    }
+  } catch (error) {
+    setHwConnectionState('fault', 'Backend unavailable on 127.0.0.1:8766');
+    addHwEvent('ERROR', error.message, 'error');
+  }
+}
+
+function updateHwEmulatorModelUi() {
+  const acoustic = document.getElementById('hwEmulatorModel').value === 'acoustic';
+  document.getElementById('hwFastScenarioSettings').classList.toggle('hidden', acoustic);
+  document.getElementById('hwAcousticScenarioSettings').classList.toggle('hidden', !acoustic);
+  document.getElementById('btnHwEmulator').textContent = acoustic ? 'Acoustic' : 'Emulator';
+  updateHwGridSource();
+}
+
+function updateHwGridSource(frame = hwLastFrame || hwInit) {
+  const element = document.getElementById('hwGridSource');
+  if (!element) return;
+  if (frame?.grid_source === 'deployment_contract') {
+    const cfg = frame.configuration;
+    element.textContent = `Deployment parity · ${cfg?.rows ?? 7} × ${cfg?.columns ?? 7} / ${cfg?.sectors ?? 49} sectors · exact firmware delay table`;
+  } else if (frame?.grid_source === 'exploratory_simulation') {
+    const cfg = frame.configuration;
+    element.textContent = `Exploratory acoustic grid · ${cfg?.rows ?? '?'} × ${cfg?.columns ?? '?'} / ${cfg?.sectors ?? '?'} sectors · simulated quantized delays, hardware unchanged`;
+  } else if (frame?.grid_source === 'firmware_reported') {
+    const cfg = frame.configuration;
+    element.textContent = cfg
+      ? `Firmware reported · ${cfg.rows} × ${cfg.columns} / ${cfg.sectors} sectors · change the generated beam table and reflash to modify`
+      : 'Firmware reported · grid and FOV arrive from the device after connection';
+  } else {
+    const acoustic = document.getElementById('hwEmulatorModel').value === 'acoustic';
+    element.textContent = acoustic
+      ? 'Acoustic simulation grid · changes rebuild beam levels while reusing the room cache'
+      : 'Fast emulator grid · editable below';
+  }
+}
+
+function renderHwAcousticStatus(status) {
+  const statusEl = document.getElementById('hwAcousticStatus');
+  const progress = document.getElementById('hwAcousticProgress');
+  const prepare = document.getElementById('btnHwAcousticPrepare');
+  const cancel = document.getElementById('btnHwAcousticCancel');
+  const state = status?.state || 'idle';
+  progress.value = Number(status?.overall_percent ?? status?.percent ?? 0);
+  prepare.disabled = state === 'preparing';
+  cancel.disabled = state !== 'preparing';
+  if (state === 'ready') {
+    hwAcousticCacheId = status.cache_id;
+    const rt60 = Number.isFinite(status.measured_rt60_s)
+      ? ` · RT60 ${status.measured_rt60_s.toFixed(2)} s` : '';
+    statusEl.textContent = `Ready · ${Number(status.preparation_seconds || 0).toFixed(1)} s${rt60} · uncalibrated`;
+  } else if (state === 'preparing') {
+    const eta = Number.isFinite(status.eta_s) ? ` · ETA ${Math.ceil(status.eta_s)} s` : '';
+    statusEl.textContent = `${status.stage || 'preparing'} · ${Number(status.overall_percent ?? status.percent ?? 0).toFixed(0)}%${eta}`;
+  } else if (state === 'failed') {
+    hwAcousticCacheId = null;
+    statusEl.textContent = `Failed · ${status.error || 'unknown error'}`;
+  } else if (state === 'canceled') {
+    hwAcousticCacheId = null;
+    statusEl.textContent = 'Preparation canceled';
+  } else {
+    statusEl.textContent = 'No acoustic cache prepared';
+  }
+}
+
+async function pollHwAcousticStatus() {
+  if (hwAcousticPollTimer) clearTimeout(hwAcousticPollTimer);
+  try {
+    const response = await fetch('http://127.0.0.1:8766/hw_acoustic_status');
+    if (!response.ok) throw new Error('status unavailable');
+    const status = await response.json();
+    renderHwAcousticStatus(status);
+    if (status.state === 'preparing') {
+      hwAcousticPollTimer = setTimeout(pollHwAcousticStatus, 500);
+    }
+  } catch (error) {
+    document.getElementById('hwAcousticStatus').textContent = `Backend unavailable · ${error.message}`;
   }
 }
 
@@ -2113,13 +2628,27 @@ function drawHwBirdsEye(frame) {
 
 function hwHeatColor(value) {
   const clamped = Math.max(0, Math.min(1, value));
-  const low = new THREE.Color(0x050505);
-  const mid = new THREE.Color(0xd94b00);
-  const high = new THREE.Color(0xffffdd);
+  const low = new THREE.Color(0x08131a);
+  const mid = new THREE.Color(0x238ba3);
+  const high = new THREE.Color(0xf2c96d);
   const color = clamped < 0.5
     ? low.lerp(mid, clamped * 2)
     : mid.lerp(high, (clamped - 0.5) * 2);
   return `rgb(${Math.round(color.r * 255)},${Math.round(color.g * 255)},${Math.round(color.b * 255)})`;
+}
+
+function hwLevelNormalized(level) {
+  if (!Number.isFinite(level)) return 0;
+  const floorDb = parseFloat(document.getElementById('hwDbFloor').value);
+  const floor = Number.isFinite(floorDb) ? floorDb : -40;
+  return Math.max(0, Math.min(1, (level - floor) / Math.max(1, -floor)));
+}
+
+function hwFreshnessFactor(row, column) {
+  const age = hwCellAgeMs(row, column);
+  if (!Number.isFinite(age)) return 0.25;
+  if (age <= 2000) return 1;
+  return Math.max(0.32, 1 - (age - 2000) / 28000 * 0.68);
 }
 
 function drawHwSectorHeatmap(ctx, W, H, frame) {
@@ -2127,10 +2656,6 @@ function drawHwSectorHeatmap(ctx, W, H, frame) {
   const azimuths = frame.azimuth_deg;
   const elevations = frame.elevation_deg;
   const levels = frame.levels_db;
-  const finite = levels.flat().filter(Number.isFinite);
-  const peak = finite.length ? Math.max(...finite) : 0;
-  const dynamicRange = Math.abs(parseFloat(document.getElementById('hwDbFloor').value) || -40);
-  const floor = peak - dynamicRange;
   const marginLeft = Math.max(64, W * 0.09);
   const marginRight = 34;
   const marginTop = 46;
@@ -2158,19 +2683,41 @@ function drawHwSectorHeatmap(ctx, W, H, frame) {
       const displayRow = cfg.rows - 1 - row;
       const x = marginLeft + column * cellWidth;
       const y = marginTop + displayRow * cellHeight;
-      const normalized = Number.isFinite(level) ? (level - floor) / dynamicRange : 0;
+      const normalized = hwLevelNormalized(level);
+      const age = hwCellAgeMs(row, column);
+      const freshness = hwFreshnessFactor(row, column);
+      ctx.globalAlpha = freshness;
       ctx.fillStyle = Number.isFinite(level) ? hwHeatColor(normalized) : '#11151a';
       ctx.fillRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
-      ctx.strokeStyle = 'rgba(255,170,80,0.25)';
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = 'rgba(94,142,165,0.28)';
       ctx.strokeRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
+      if (Number.isFinite(age) && age > HW_STALE_MS) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
+        ctx.clip();
+        ctx.strokeStyle = 'rgba(185,204,214,0.24)';
+        ctx.lineWidth = 1;
+        const spacing = Math.max(8, Math.min(16, Math.min(cellWidth, cellHeight) / 3));
+        for (let offset = -cellHeight; offset < cellWidth; offset += spacing) {
+          ctx.beginPath();
+          ctx.moveTo(x + offset, y + cellHeight);
+          ctx.lineTo(x + offset + cellHeight, y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
       if (cellWidth > 54 && cellHeight > 32 && Number.isFinite(level)) {
-        ctx.fillStyle = normalized > 0.65 ? '#160a02' : '#ffcc99';
+        ctx.globalAlpha = Math.max(0.55, freshness);
+        ctx.fillStyle = normalized > 0.65 ? '#071014' : '#d9edf4';
         ctx.fillText(level.toFixed(1), x + cellWidth / 2, y + cellHeight / 2);
+        ctx.globalAlpha = 1;
       }
     }
   }
 
-  ctx.fillStyle = '#ffcc99';
+  ctx.fillStyle = '#b9d6e2';
   for (let column = 0; column < cfg.columns; column++) {
     if (!Number.isFinite(azimuths[column])) continue;
     const x = marginLeft + (column + 0.5) * cellWidth;
@@ -2184,7 +2731,7 @@ function drawHwSectorHeatmap(ctx, W, H, frame) {
     ctx.fillText(`${elevations[row].toFixed(1)}°`, marginLeft - 10, y);
   }
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#b89878';
+  ctx.fillStyle = '#7e96a4';
   ctx.fillText('AZIMUTH', marginLeft + gridWidth / 2, H - 10);
   ctx.save();
   ctx.translate(16, marginTop + gridHeight / 2);
@@ -2203,7 +2750,34 @@ function drawHwSectorHeatmap(ctx, W, H, frame) {
   };
   drawMarker(strongest, '#ffffff', 1.5, 5);
   drawMarker(frame.last_steer, '#6bcfff', 2.5, 3);
-  drawMarker(frame.target, '#5fd28a', 3.5, 1);
+  drawMarker(frame.target, '#f2c96d', 3.5, 1);
+
+  const truth = frame.emulator_truth;
+  if (truth) {
+    const azimuthEdges = hwAngularEdges(azimuths, 10);
+    const elevationEdges = hwAngularEdges(elevations, 10);
+    const azimuthRatio = (truth.azimuth_deg - azimuthEdges[0]) /
+      (azimuthEdges.at(-1) - azimuthEdges[0]);
+    const elevationRatio = (truth.elevation_deg - elevationEdges[0]) /
+      (elevationEdges.at(-1) - elevationEdges[0]);
+    if (azimuthRatio >= 0 && azimuthRatio <= 1 && elevationRatio >= 0 && elevationRatio <= 1) {
+      const x = marginLeft + azimuthRatio * gridWidth;
+      const y = marginTop + (1 - elevationRatio) * gridHeight;
+      ctx.save();
+      ctx.strokeStyle = truth.source_active === false ? '#f2c96d' : '#8dffac';
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(x, y, 9, 0, Math.PI * 2);
+      ctx.moveTo(x - 14, y); ctx.lineTo(x + 14, y);
+      ctx.moveTo(x, y - 14); ctx.lineTo(x, y + 14);
+      ctx.stroke();
+      ctx.font = '10px Share Tech Mono, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('TRUE', x + 12, y - 12);
+      ctx.restore();
+    }
+  }
 }
 
 // -- Metrics panel --
@@ -2249,29 +2823,39 @@ function renderHwMetrics(frame) {
   const el = document.getElementById('hwMetrics');
   if (!el) return;
   if (frame.configuration) {
-    const az = Number.isFinite(frame.est_az_deg) ? `${frame.est_az_deg.toFixed(1)}°` : '—';
-    const elevation = Number.isFinite(frame.est_el_deg) ? `${frame.est_el_deg.toFixed(1)}°` : '—';
-    const fixedBeamLevel = hwFixedBeamLevel(frame);
-    const displayedLevel = hwMonitoring && Number.isFinite(fixedBeamLevel) ? fixedBeamLevel : frame.argmax_db;
-    const db = Number.isFinite(displayedLevel) ? `${displayedLevel.toFixed(1)} dBFS` : '—';
     const rate = Number.isFinite(frame.scan_rate_hz) ? `${frame.scan_rate_hz.toFixed(2)} Hz` : '—';
-    const targetState = hwMonitoring ? 'MONITORING' : (frame.target ? 'LOCKED' : frame.firmware_mode);
+    const trackRate = Number.isFinite(frame.target_update_rate_hz)
+      ? `${frame.target_update_rate_hz.toFixed(1)} Hz` : '—';
+    const flight = frame.emulator_flight_profile
+      ? `<br>Flight: <span class="val">${frame.emulator_flight_profile}</span> · ${Number(frame.emulator_flight_speed).toFixed(1)}×`
+      : '';
+    const acoustic = frame.acoustic_cache_id
+      ? `<br>Acoustic: <span class="val">${frame.acoustic_scenario}</span> · RT60 ${Number(frame.acoustic_measured_rt60_s).toFixed(2)} s · ${frame.acoustic_calibrated ? 'calibrated' : 'uncalibrated'}` +
+        `<br>Detector: <span class="val">intended 1–4 kHz FIR</span> · SigmaStudio export mismatch`
+      : '';
+    const margin = Number.isFinite(frame.margin_db) ? `${frame.margin_db.toFixed(1)} dB` : '—';
     const azimuthEdges = frame.azimuth_deg.length ? hwAngularEdges(frame.azimuth_deg, 10) : [];
     const elevationEdges = frame.elevation_deg.length ? hwAngularEdges(frame.elevation_deg, 10) : [];
     const azimuthFov = azimuthEdges.length
       ? `${azimuthEdges[0].toFixed(1)}°..${azimuthEdges.at(-1).toFixed(1)}°` : '—';
     const elevationFov = elevationEdges.length
       ? `${elevationEdges[0].toFixed(1)}°..${elevationEdges.at(-1).toFixed(1)}°` : '—';
+    const gridSource = frame.grid_source === 'deployment_contract' ? 'deployment contract'
+      : frame.grid_source === 'exploratory_simulation' ? 'exploratory acoustic'
+      : frame.grid_source === 'firmware_reported' ? 'firmware reported' : 'fast emulator';
     el.innerHTML =
-      `<span style="color:#d94b00;font-weight:600">HEIMDALL ${targetState}</span><br>` +
-      `Direction: <span style="color:#ff8833">${az}, ${elevation}</span><br>` +
-      `${hwMonitoring ? 'Beam level' : 'Peak'}: <span style="color:#ffcc66">${db}</span>` +
-      `${hwMonitoring ? '' : ` · Δ${frame.margin_db.toFixed(1)} dB`}<br>` +
-      `Grid: ${frame.configuration.rows} × ${frame.configuration.columns} · ` +
-      `${frame.configuration.sectors} sectors<br>` +
+      `Grid <span class="val">${frame.configuration.rows} × ${frame.configuration.columns}</span> · ` +
+      `${frame.configuration.sectors} sectors · ${frame.configuration.microphones} mics · ${gridSource}<br>` +
       `FOV: az ${azimuthFov} · el ${elevationFov}<br>` +
-      `Full-scan rate: <span style="color:#ffcc66">${rate}</span><br>` +
-      `Pass #${frame.scan_count} · protocol errors ${frame.protocol_errors}`;
+      `Peak-to-next: <span class="val">${margin}</span><br>` +
+      `Last full pass: <span class="val">${rate}</span><br>` +
+      `Track updates: <span class="val">${trackRate}</span> · host observed<br>` +
+      `Pass ${frame.scan_count} · protocol warnings ${frame.protocol_errors}${flight}${acoustic}`;
+    const stats = document.getElementById('hwStatsLine');
+    if (stats) {
+      const peak = Number.isFinite(frame.argmax_db) ? `${frame.argmax_db.toFixed(1)} dBFS` : '—';
+      stats.textContent = `PEAK ${peak}  |  TRACK UPDATE ${trackRate}  |  FULL SCAN ${rate}  |  PASS ${frame.scan_count}`;
+    }
     return;
   }
   const az = String(frame.est_az_deg).padStart(3, '\u00a0');
@@ -2500,7 +3084,28 @@ function updateHwHeader(frame) {
   if (timeEl) timeEl.textContent = new Date().toISOString().slice(11, 19) + 'Z';
   if (arrayEl && frame.configuration) arrayEl.textContent = `${frame.configuration.microphones} MIC · ${frame.configuration.rows}×${frame.configuration.columns}`;
   if (portEl) portEl.textContent = frame.transport || '--';
-  if (statusEl) statusEl.textContent = frame.target ? 'LOCKED' : (frame.firmware_mode || 'IDLE');
+  if (statusEl) {
+    const modeLabel = hwMonitoring ? 'FIXED BEAM'
+      : frame.target ? 'TRACKING'
+      : ({F: 'FULL SWEEP', C: 'CONTINUOUS', G: 'SEARCHING', IDLE: 'READY'}[frame.firmware_mode] || frame.firmware_mode || 'READY');
+    statusEl.textContent = hwPaused ? `DISPLAY FROZEN · ${modeLabel}` : modeLabel;
+  }
+}
+
+function updateHwReadiness(frame) {
+  updateHwHeader(frame || {});
+  const ages = hwCellTimestamps.flat().map(timestamp => Number.isFinite(timestamp)
+    ? Math.max(0, Date.now() - timestamp) : null).filter(Number.isFinite);
+  const age = ages.length ? Math.min(...ages) : null;
+  const ageEl = document.getElementById('hbAge');
+  const warningsEl = document.getElementById('hbWarnings');
+  if (ageEl) ageEl.textContent = formatHwAge(age);
+  if (warningsEl) {
+    const warnings = frame?.protocol_errors || 0;
+    warningsEl.textContent = warnings;
+    warningsEl.style.color = warnings > 0 ? 'var(--hw-fault)' : '';
+  }
+  syncHwControls();
 }
 
 // -- 3D beam pattern mesh (torus or sphere, selectable) --
@@ -2509,7 +3114,7 @@ function buildHardwareRingMesh(powers_db, angles_deg, dispRadius, opacity) {
   if (!powers_db || !angles_deg || angles_deg.length === 0) return;
 
   const N = angles_deg.length;
-  const shape = document.getElementById('hw3dShape').value;
+  const shape = document.getElementById('hw3dShape')?.value || 'torus';
 
   // ── Spatial smoothing: 5-tap circular moving average ──
   const smoothed = new Array(N);
@@ -2778,44 +3383,29 @@ function updateHw3dRing(frame) {
   if (frame.levels_db && frame.configuration) {
     buildHardwareSectorMesh(frame);
     steerGroup.clear();
-    if (Number.isFinite(frame.true_az_deg) && Number.isFinite(frame.true_el_deg)) {
-      const radius = parseFloat(document.getElementById('dispRadius')?.value || 2.0) * 1.2;
-      renderTrueDir(frame.true_az_deg * Math.PI / 180, frame.true_el_deg * Math.PI / 180, radius * 0.9);
-    } else {
-      trueDirGroup.clear();
-    }
+    trueDirGroup.clear();
     return;
   }
 
   const scan = frame.beam_scan;
   if (!scan || !scan.powers_db) return;
 
-  const dispRadius = parseFloat(document.getElementById('dispRadius')?.value || 2.0);
-  const opacity = parseFloat(document.getElementById('opacity')?.value || 0.7);
+  const dispRadius = parseFloat(document.getElementById('hwDisplayRadius')?.value || 2.0);
+  const opacity = parseFloat(document.getElementById('hwOpacity')?.value || 0.7);
 
   buildHardwareRingMesh(scan.powers_db, scan.angles_deg, dispRadius, opacity);
 
   // Update DOA arrows
   const estAzRad = frame.est_az_deg * Math.PI / 180;
   renderSteerDir(estAzRad, 0, dispRadius * 1.3);
-
-  if (frame.true_az_deg != null) {
-    const trueAzRad = frame.true_az_deg * Math.PI / 180;
-    renderTrueDir(trueAzRad, 0, dispRadius * 1.1);
-  } else {
-    trueDirGroup.clear();
-  }
+  trueDirGroup.clear();
 }
 
 function buildHardwareSectorMesh(frame) {
   hwRingGroup.clear();
   const levels = frame.levels_db;
-  const finite = levels.flat().filter(Number.isFinite);
-  const peak = finite.length ? Math.max(...finite) : 0;
-  const dynamicRange = Math.abs(parseFloat(document.getElementById('hwDbFloor').value) || -40);
-  const floor = peak - dynamicRange;
-  const radius = parseFloat(document.getElementById('dispRadius')?.value || 2.0);
-  const opacity = parseFloat(document.getElementById('opacity')?.value || 0.7);
+  const radius = parseFloat(document.getElementById('hwDisplayRadius')?.value || 2.0);
+  const opacity = parseFloat(document.getElementById('hwOpacity')?.value || 0.7);
   const azimuthEdges = hwAngularEdges(frame.azimuth_deg, 10);
   const elevationEdges = hwAngularEdges(frame.elevation_deg, 10).map(value => Math.max(-90, Math.min(90, value)));
   const vertices = [];
@@ -2838,7 +3428,7 @@ function buildHardwareSectorMesh(frame) {
     for (let column = 0; column < frame.configuration.columns; column++) {
       const level = levels[row][column];
       const measured = Number.isFinite(level);
-      const value = measured ? Math.max(0, Math.min(1, (level - floor) / dynamicRange)) : 0;
+      const value = hwLevelNormalized(level);
       if (measured && (!strongest || level > strongest.level)) strongest = {row, column, level};
 
       // Stronger incoming energy pulls the tile slightly inward toward the array.
@@ -2850,7 +3440,9 @@ function buildHardwareSectorMesh(frame) {
         sphericalPoint(azimuthEdges[column], elevationEdges[row + 1], tileRadius),
       ];
       const base = vertices.length / 3;
+      const freshness = hwFreshnessFactor(row, column);
       const color = new THREE.Color(measured ? hwHeatColor(value) : '#11151a');
+      color.multiplyScalar(Math.max(0.3, freshness));
       for (const corner of corners) {
         vertices.push(corner.x, corner.y, corner.z);
         colors.push(color.r, color.g, color.b);
@@ -2874,14 +3466,14 @@ function buildHardwareSectorMesh(frame) {
     opacity: Math.max(0.25, opacity),
     side: THREE.DoubleSide,
     shininess: 25,
-    emissive: 0x160700,
+    emissive: 0x06151a,
     emissiveIntensity: 0.35,
   })));
 
   const gridGeometry = new THREE.BufferGeometry();
   gridGeometry.setAttribute('position', new THREE.Float32BufferAttribute(gridVertices, 3));
   hwRingGroup.add(new THREE.LineSegments(gridGeometry, new THREE.LineBasicMaterial({
-    color: 0xff9a4d, transparent: true, opacity: 0.34,
+    color: 0x5f91a5, transparent: true, opacity: 0.38,
   })));
 
   const focus = frame.target || frame.last_steer || strongest;
@@ -2902,6 +3494,23 @@ function buildHardwareSectorMesh(frame) {
       elevationEdges[focus.row], elevationEdges[focus.row + 1],
       radius * 0.985, arrowColor, sphericalPoint,
     ));
+  }
+
+  const truth = frame.emulator_truth;
+  if (truth) {
+    const truthPoint = sphericalPoint(truth.azimuth_deg, truth.elevation_deg, radius * 1.08);
+    const truthColor = truth.source_active === false ? 0xf2c96d : 0x8dffac;
+    const truthLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), truthPoint]),
+      new THREE.LineBasicMaterial({color: truthColor, transparent: true, opacity: 0.8}),
+    );
+    hwRingGroup.add(truthLine);
+    const truthMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 0.045, 16, 12),
+      new THREE.MeshBasicMaterial({color: truthColor}),
+    );
+    truthMarker.position.copy(truthPoint);
+    hwRingGroup.add(truthMarker);
   }
 }
 
@@ -2961,58 +3570,130 @@ document.getElementById('hwViewMode').addEventListener('change', () => {
     hwRingGroup.visible = true;
     frameHardwareDome();
   }
-  // Resize Three.js renderer to new viewport
-  setTimeout(() => {
-    const c3 = document.getElementById('canvas3d');
-    if (c3.offsetWidth > 0) {
-      camera.aspect = c3.clientWidth / c3.clientHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(c3.clientWidth, c3.clientHeight);
-    }
-  }, 50);
+  setTimeout(resizeHardwareViews, 50);
 });
 
 function frameHardwareDome() {
-  const radius = parseFloat(document.getElementById('dispRadius')?.value || 2.0);
+  const radius = parseFloat(document.getElementById('hwDisplayRadius')?.value || 2.0);
   camera.position.set(-radius * 2.35, radius * 1.15, radius * 2.0);
   controls.target.set(radius * 0.32, 0, 0);
   camera.lookAt(controls.target);
   controls.update();
 }
 
-document.getElementById('hwTrueEnable').addEventListener('change', (e) => {
-  const enabled = e.target.checked;
-  document.getElementById('hwTrueAz').disabled = !enabled;
-  document.getElementById('hwTrueEl').disabled = !enabled;
-  if (enabled) {
-    const az = parseFloat(document.getElementById('hwTrueAz').value);
-    const el = parseFloat(document.getElementById('hwTrueEl').value);
-    document.getElementById('hwTrueAzVal').textContent = az + '°';
-    document.getElementById('hwTrueElVal').textContent = el + '°';
-    hwSend({ type: 'set_true_dir', az_deg: az, el_deg: el });
-  } else {
-    document.getElementById('hwTrueAzVal').textContent = '\u2014';
-    document.getElementById('hwTrueElVal').textContent = '\u2014';
-    hwSend({ type: 'set_true_dir', az_deg: null, el_deg: null });
+document.getElementById('btnHwPause').addEventListener('click', () => {
+  hwPaused = !hwPaused;
+  document.getElementById('btnHwPause').textContent = hwPaused ? 'Resume Display' : 'Freeze Display';
+  hwSend({ type: hwPaused ? 'pause' : 'resume' });
+  addHwEvent('DISPLAY', hwPaused ? 'Presentation frozen; device continues operating' : 'Live presentation resumed', 'warning');
+  if (hwLastFrame) updateHwReadiness(hwLastFrame);
+});
+
+document.getElementById('hwAdvancedToggle').addEventListener('change', (event) => {
+  document.getElementById('hwAdvancedPanel').classList.toggle('hidden', !event.target.checked);
+});
+document.getElementById('hwAdvancedPanel').classList.toggle(
+  'hidden', !document.getElementById('hwAdvancedToggle').checked);
+document.getElementById('hwEmulatorModel').addEventListener('change', updateHwEmulatorModelUi);
+updateHwEmulatorModelUi();
+
+document.getElementById('hwAcousticScenario').addEventListener('change', () => {
+  hwAcousticCacheId = null;
+  clearHwAudition();
+  renderHwAcousticStatus({state: 'idle'});
+});
+
+for (const id of ['hwEmRows', 'hwEmColumns', 'hwEmAzMin', 'hwEmAzMax', 'hwEmElMin', 'hwEmElMax']) {
+  document.getElementById(id).addEventListener('change', () => {
+    if (document.getElementById('hwEmulatorModel').value === 'acoustic') {
+      hwAcousticCacheId = null;
+      clearHwAudition();
+      renderHwAcousticStatus({state: 'idle'});
+      updateHwGridSource();
+    }
+  });
+}
+
+document.getElementById('btnHwAcousticPrepare').addEventListener('click', async () => {
+  hwAcousticCacheId = null;
+  try {
+    const response = await fetch('http://127.0.0.1:8766/hw_acoustic_prepare', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        scenario: document.getElementById('hwAcousticScenario').value,
+        rows: parseInt(document.getElementById('hwEmRows').value),
+        columns: parseInt(document.getElementById('hwEmColumns').value),
+        azimuth_min_deg: parseFloat(document.getElementById('hwEmAzMin').value),
+        azimuth_max_deg: parseFloat(document.getElementById('hwEmAzMax').value),
+        elevation_min_deg: parseFloat(document.getElementById('hwEmElMin').value),
+        elevation_max_deg: parseFloat(document.getElementById('hwEmElMax').value),
+      }),
+    });
+    if (!response.ok) throw new Error((await response.json()).detail || 'preparation failed');
+    renderHwAcousticStatus(await response.json());
+    pollHwAcousticStatus();
+  } catch (error) {
+    renderHwAcousticStatus({state: 'failed', error: error.message});
   }
 });
 
-document.getElementById('hwTrueAz').addEventListener('input', (e) => {
-  if (!document.getElementById('hwTrueEnable').checked) return;
-  document.getElementById('hwTrueAzVal').textContent = e.target.value + '°';
-  hwSend({ type: 'set_true_dir', az_deg: parseFloat(e.target.value), el_deg: parseFloat(document.getElementById('hwTrueEl').value) });
+document.getElementById('hwAuditionMode').addEventListener('change', selectHwAuditionClip);
+document.getElementById('btnHwAudition').addEventListener('click', async () => {
+  const button = document.getElementById('btnHwAudition');
+  const status = document.getElementById('hwAuditionStatus');
+  if (!hwAcousticCacheId) {
+    status.textContent = 'Prepare an acoustic scene first';
+    return;
+  }
+  const strongest = hwLastFrame ? hwStrongestObservation(hwLastFrame) : null;
+  const selectedSector = hwLastFrame?.target?.sector ?? hwLastFrame?.last_steer?.sector
+    ?? strongest?.sector ?? parseInt(document.getElementById('hwSector').value);
+  button.disabled = true;
+  status.textContent = 'Rendering...';
+  try {
+    const response = await fetch('http://127.0.0.1:8766/hw_acoustic_audition', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        acoustic_cache_id: hwAcousticCacheId,
+        start_s: hwLastFrame?.emulator_truth?.elapsed_s ?? 0,
+        duration_s: 3.0,
+        selected_sector: selectedSector,
+      }),
+    });
+    if (!response.ok) throw new Error((await response.json()).detail || 'audio render failed');
+    const result = await response.json();
+    clearHwAudition();
+    for (const [name, encoded] of Object.entries(result.clips_b64)) {
+      hwAuditionUrls[name] = b64ToWavUrl(encoded);
+    }
+    selectHwAuditionClip();
+    status.textContent = `3.0 s · sector ${result.selected_sector} · joint gain`;
+  } catch (error) {
+    status.textContent = `Render failed · ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
 });
 
-document.getElementById('hwTrueEl').addEventListener('input', (e) => {
-  if (!document.getElementById('hwTrueEnable').checked) return;
-  document.getElementById('hwTrueElVal').textContent = e.target.value + '°';
-  hwSend({ type: 'set_true_dir', az_deg: parseFloat(document.getElementById('hwTrueAz').value), el_deg: parseFloat(e.target.value) });
+document.getElementById('btnHwAcousticCancel').addEventListener('click', async () => {
+  await fetch('http://127.0.0.1:8766/hw_acoustic_cancel', {method: 'POST'});
+  pollHwAcousticStatus();
 });
 
-document.getElementById('btnHwPause').addEventListener('click', () => {
-  hwPaused = !hwPaused;
-  document.getElementById('btnHwPause').textContent = hwPaused ? 'Resume' : 'Pause';
-  hwSend({ type: hwPaused ? 'pause' : 'resume' });
+for (const [inputId, valueId, decimals] of [
+  ['hwDisplayRadius', 'hwDisplayRadiusVal', 1],
+  ['hwOpacity', 'hwOpacityVal', 2],
+]) {
+  document.getElementById(inputId).addEventListener('input', (event) => {
+    document.getElementById(valueId).textContent = Number(event.target.value).toFixed(decimals);
+    hwNeedsRedraw = true;
+    if (document.body.classList.contains('hardware-3d-active')) frameHardwareDome();
+  });
+}
+
+document.getElementById('btnHwClearEvents').addEventListener('click', () => {
+  hwEventLog = [];
+  renderHwEventLog();
 });
 
 document.getElementById('btnHwConnect').addEventListener('click', async () => {
@@ -3020,7 +3701,7 @@ document.getElementById('btnHwConnect').addEventListener('click', async () => {
   if (!port) { alert('Enter a serial port (e.g. COM18)'); return; }
   const baud = parseInt(document.getElementById('hwSerialBaud').value);
   const statusEl = document.getElementById('hwStatus');
-  statusEl.textContent = `Connecting ${port}...`;
+  setHwConnectionState('connecting', `Opening ${port} at ${baud} baud...`);
   try {
     const response = await fetch('http://127.0.0.1:8766/hw_connect', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -3029,14 +3710,16 @@ document.getElementById('btnHwConnect').addEventListener('click', async () => {
     if (!response.ok) throw new Error((await response.json()).detail || 'connection failed');
     startHardwareSession();
   } catch (err) {
-    statusEl.textContent = `Error: ${err.message}`;
+    setHwConnectionState('fault', `Connection failed · ${err.message}`);
+    addHwEvent('ERROR', `Serial connection failed: ${err.message}`, 'error');
   }
 });
 
 document.getElementById('btnHwEmulator').addEventListener('click', async () => {
-  const statusEl = document.getElementById('hwStatus');
-  statusEl.textContent = 'Starting emulator...';
+  setHwConnectionState('connecting', 'Starting protocol emulator...');
   try {
+    const acoustic = document.getElementById('hwEmulatorModel').value === 'acoustic';
+    if (acoustic && !hwAcousticCacheId) throw new Error('prepare an acoustic scene first');
     const emulatorConfig = {
       rows: parseInt(document.getElementById('hwEmRows').value),
       columns: parseInt(document.getElementById('hwEmColumns').value),
@@ -3044,24 +3727,29 @@ document.getElementById('btnHwEmulator').addEventListener('click', async () => {
       azimuth_max_deg: parseFloat(document.getElementById('hwEmAzMax').value),
       elevation_min_deg: parseFloat(document.getElementById('hwEmElMin').value),
       elevation_max_deg: parseFloat(document.getElementById('hwEmElMax').value),
+      flight_profile: document.getElementById('hwEmFlightProfile').value,
+      flight_speed: parseFloat(document.getElementById('hwEmFlightSpeed').value),
     };
     const response = await fetch('http://127.0.0.1:8766/hw_connect', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({transport: 'emulator', ...emulatorConfig}),
+      body: JSON.stringify(acoustic
+        ? {transport: 'acoustic', acoustic_cache_id: hwAcousticCacheId}
+        : {transport: 'emulator', ...emulatorConfig}),
     });
     if (!response.ok) throw new Error((await response.json()).detail || 'emulator failed');
     startHardwareSession();
   } catch (err) {
-    statusEl.textContent = `Error: ${err.message}`;
+    setHwConnectionState('fault', `Emulator failed · ${err.message}`);
+    addHwEvent('ERROR', `Emulator failed: ${err.message}`, 'error');
   }
 });
 
 document.getElementById('btnHwDisconnect').addEventListener('click', async () => {
+  addHwEvent('LINK', 'Operator requested disconnect', 'warning');
   try {
     await fetch('http://127.0.0.1:8766/hw_disconnect', {method: 'POST'});
   } finally {
     stopHardwareSession();
-    document.getElementById('hwStatus').textContent = 'Disconnected';
   }
 });
 
@@ -3070,7 +3758,10 @@ for (const [buttonId, command] of [
 ]) {
   document.getElementById(buttonId).addEventListener('click', () => {
     stopHwMonitor();
-    hwSend({type: 'command', command});
+    if (hwSend({type: 'command', command})) {
+      const labels = {F: 'Full sweep requested', C: 'Continuous scan requested', G: 'Adaptive tracking requested', X: 'Stop requested'};
+      addHwEvent('MODE', labels[command], command === 'X' ? 'warning' : '');
+    }
   });
 }
 
@@ -3081,11 +3772,7 @@ document.getElementById('btnHwSteer').addEventListener('click', () => {
     document.getElementById('hwStatus').textContent = 'Invalid sector';
     return;
   }
-  hwSend({type: 'command', command: `S,${sector}`});
-});
-
-document.getElementById('btnHwMeasure').addEventListener('click', () => {
-  hwSend({type: 'command', command: 'M'});
+  if (hwSend({type: 'command', command: `S,${sector}`})) addHwEvent('STEER', `Sector ${sector} requested`);
 });
 
 document.getElementById('btnHwMonitor').addEventListener('click', () => {
@@ -3108,6 +3795,7 @@ document.getElementById('btnHwMonitor').addEventListener('click', () => {
   const button = document.getElementById('btnHwMonitor');
   button.textContent = 'Stop Monitor';
   button.classList.add('active');
+  addHwEvent('MODE', `Fixed-beam monitor · sector ${sector}`);
   restartHwMonitorTimer();
 });
 
@@ -3122,6 +3810,7 @@ function restartHwMonitorTimer() {
 }
 
 function stopHwMonitor() {
+  const wasMonitoring = hwMonitoring;
   hwMonitoring = false;
   if (hwMonitorTimer) clearInterval(hwMonitorTimer);
   hwMonitorTimer = null;
@@ -3130,6 +3819,7 @@ function stopHwMonitor() {
     button.textContent = 'Monitor Beam';
     button.classList.remove('active');
   }
+  if (wasMonitoring) addHwEvent('MODE', 'Fixed-beam monitor stopped');
 }
 
 let hwGridLayout = null;
@@ -3147,20 +3837,8 @@ document.getElementById('hwBirdsEye').addEventListener('click', (event) => {
   const sector = row * hwGridLayout.columns + column;
   stopHwMonitor();
   document.getElementById('hwSector').value = sector;
-  hwSend({type: 'command', command: `S,${sector}`});
+  if (hwSend({type: 'command', command: `S,${sector}`})) addHwEvent('STEER', `Sector ${sector} selected from heatmap`);
 });
 
-// Check hardware availability on load and auto-show tab if available
-fetch('http://127.0.0.1:8766/hw_status')
-  .then(r => r.json())
-  .then(data => {
-    if (data.available) {
-      document.getElementById('btnHardware').style.display = '';
-    } else {
-      // Still show the button but dimmed
-      document.getElementById('btnHardware').style.opacity = '0.4';
-    }
-  })
-  .catch(() => {
-    document.getElementById('btnHardware').style.opacity = '0.4';
-  });
+syncHwControls();
+pollHwAcousticStatus();

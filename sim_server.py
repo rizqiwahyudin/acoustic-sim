@@ -23,6 +23,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from heimdall_transport import EmulatorHeimdallTransport, SerialHeimdallTransport
+from heimdall_acoustic import (
+    AcousticCacheLevelProvider,
+    AcousticGridSpec,
+    PreparationCancelled,
+    acoustic_scenario,
+    load_beam_contract,
+    prepare_acoustic_cache,
+    render_acoustic_audition,
+)
 
 from acoustic_utils import (
     air_absorption_kwargs,
@@ -1261,6 +1270,117 @@ class HardwareConnectRequest(BaseModel):
     azimuth_max_deg: float = 70.0
     elevation_min_deg: float = -60.0
     elevation_max_deg: float = 60.0
+    flight_profile: str = "crossing"
+    flight_speed: float = 1.0
+    acoustic_cache_id: str | None = None
+
+
+class AcousticPrepareRequest(BaseModel):
+    scenario: str = "conference_evasive"
+    rows: int = 7
+    columns: int = 7
+    azimuth_min_deg: float = -70.0
+    azimuth_max_deg: float = 70.0
+    elevation_min_deg: float = -60.0
+    elevation_max_deg: float = 60.0
+
+
+class AcousticAuditionRequest(BaseModel):
+    acoustic_cache_id: str
+    start_s: float = 0.0
+    duration_s: float = 3.0
+    selected_sector: int | None = None
+
+
+class AcousticPreparationManager:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.cancel_event = threading.Event()
+        self.worker = None
+        self.cache = None
+        self.status = {"state": "idle", "stage": "idle", "percent": 0.0}
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.status)
+
+    def start(self, scenario_name, grid_spec=None):
+        scenario = acoustic_scenario(scenario_name)
+        grid_spec = grid_spec or AcousticGridSpec()
+        grid_spec.validate()
+        with self.lock:
+            if self.worker is not None and self.worker.is_alive():
+                raise ValueError("an acoustic scene is already being prepared")
+            self.cancel_event = threading.Event()
+            self.cache = None
+            self.status = {
+                "state": "preparing",
+                "stage": "starting",
+                "percent": 0.0,
+                "scenario": scenario_name,
+                "grid": grid_spec.__dict__,
+            }
+            self.worker = threading.Thread(
+                target=self._prepare,
+                args=(scenario, grid_spec),
+                daemon=True,
+            )
+            self.worker.start()
+        return self.snapshot()
+
+    def _prepare(self, scenario, grid_spec):
+        def report(progress):
+            with self.lock:
+                self.status.update(progress)
+
+        try:
+            cache = prepare_acoustic_cache(
+                scenario,
+                progress=report,
+                cancel_event=self.cancel_event,
+                grid_spec=grid_spec,
+            )
+        except PreparationCancelled:
+            with self.lock:
+                self.status.update({"state": "canceled", "stage": "canceled"})
+            return
+        except Exception as error:
+            with self.lock:
+                self.status.update({
+                    "state": "failed",
+                    "stage": "failed",
+                    "error": str(error),
+                })
+            return
+        with self.lock:
+            self.cache = cache
+            grid = cache.manifest.get("grid", grid_spec.__dict__)
+            self.status.update({
+                "state": "ready",
+                "stage": "ready",
+                "percent": 100.0,
+                "cache_id": cache.cache_id,
+                "preparation_seconds": cache.manifest["preparation_seconds"],
+                "measured_rt60_s": cache.manifest.get("measured_rt60_s"),
+                "calibrated": cache.manifest["calibrated"],
+                "grid": grid,
+                "grid_mode": cache.manifest.get("grid_mode", "deployment_contract"),
+                "room_cache_id": cache.manifest.get("room_cache_id"),
+            })
+
+    def cancel(self):
+        self.cancel_event.set()
+        return self.snapshot()
+
+    def ready_cache(self, cache_id=None):
+        with self.lock:
+            cache = self.cache
+        if cache is None or (cache_id is not None and cache.cache_id != cache_id):
+            raise ValueError("prepare the requested acoustic scene before connecting")
+        return cache
+
+
+_acoustic_preparation = AcousticPreparationManager()
 
 
 def _replace_heimdall_transport(transport):
@@ -1269,6 +1389,10 @@ def _replace_heimdall_transport(transport):
         previous = _heimdall_transport
         _heimdall_transport = transport
     if previous is not None:
+        try:
+            previous.send_command("X")
+        except (OSError, ValueError):
+            pass
         previous.stop()
         if isinstance(previous, threading.Thread):
             previous.join(timeout=1.0)
@@ -1288,6 +1412,24 @@ def hw_connect(request: HardwareConnectRequest):
                 azimuth_max_deg=request.azimuth_max_deg,
                 elevation_min_deg=request.elevation_min_deg,
                 elevation_max_deg=request.elevation_max_deg,
+                flight_profile=request.flight_profile,
+                flight_speed=request.flight_speed,
+            )
+        elif request.transport == "acoustic":
+            cache = _acoustic_preparation.ready_cache(request.acoustic_cache_id)
+            grid = cache.manifest.get("grid", AcousticGridSpec().__dict__)
+            rows = int(grid["rows"])
+            columns = int(grid["columns"])
+            if cache.levels_raw.shape[1] != rows * columns:
+                raise ValueError("acoustic cache sector count does not match its simulation grid")
+            transport = EmulatorHeimdallTransport(
+                rows=rows,
+                columns=columns,
+                azimuth_min_deg=float(grid["azimuth_min_deg"]),
+                azimuth_max_deg=float(grid["azimuth_max_deg"]),
+                elevation_min_deg=float(grid["elevation_min_deg"]),
+                elevation_max_deg=float(grid["elevation_max_deg"]),
+                level_provider=AcousticCacheLevelProvider(cache),
             )
         elif request.transport == "serial":
             if not request.port:
@@ -1301,6 +1443,63 @@ def hw_connect(request: HardwareConnectRequest):
     return {"status": "connecting", "transport": transport.transport_name}
 
 
+@app.post("/hw_acoustic_prepare")
+def hw_acoustic_prepare(request: AcousticPrepareRequest):
+    try:
+        return _acoustic_preparation.start(
+            request.scenario,
+            AcousticGridSpec(
+                rows=request.rows,
+                columns=request.columns,
+                azimuth_min_deg=request.azimuth_min_deg,
+                azimuth_max_deg=request.azimuth_max_deg,
+                elevation_min_deg=request.elevation_min_deg,
+                elevation_max_deg=request.elevation_max_deg,
+            ),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/hw_acoustic_status")
+def hw_acoustic_status():
+    return _acoustic_preparation.snapshot()
+
+
+@app.post("/hw_acoustic_cancel")
+def hw_acoustic_cancel():
+    return _acoustic_preparation.cancel()
+
+
+@app.post("/hw_acoustic_audition")
+def hw_acoustic_audition(request: AcousticAuditionRequest):
+    try:
+        cache = _acoustic_preparation.ready_cache(request.acoustic_cache_id)
+        rendered = render_acoustic_audition(
+            cache,
+            start_s=request.start_s,
+            duration_s=request.duration_s,
+            selected_sector=request.selected_sector,
+        )
+        names = list(rendered["clips"])
+        encoded = encode_three_wavs_joint(
+            [rendered["clips"][name] for name in names],
+            rendered["sample_rate_hz"],
+        )
+        return {
+            "sample_rate_hz": rendered["sample_rate_hz"],
+            "start_s": rendered["start_s"],
+            "duration_s": rendered["duration_s"],
+            "selected_sector": rendered["selected_sector"],
+            "truth_azimuth_deg": rendered["truth_azimuth_deg"],
+            "truth_elevation_deg": rendered["truth_elevation_deg"],
+            "clips_b64": dict(zip(names, encoded)),
+            "normalization": "joint_peak",
+        }
+    except (OSError, ValueError, KeyError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.post("/hw_disconnect")
 def hw_disconnect():
     _replace_heimdall_transport(None)
@@ -1309,6 +1508,7 @@ def hw_disconnect():
 
 @app.on_event("shutdown")
 def stop_hardware_transport():
+    _acoustic_preparation.cancel()
     _replace_heimdall_transport(None)
 
 
@@ -1344,19 +1544,22 @@ async def realtime_hw_ws(ws: WebSocket):
     await ws.accept()
     await ws.send_json(_hardware_payload("init", transport.snapshot()))
     paused = False
-    last_sequence = -1
+    last_state_key = None
 
     async def push_loop():
-        nonlocal last_sequence, paused
+        nonlocal last_state_key, paused
         while True:
             if paused:
                 await asyncio.sleep(0.05)
                 continue
             snapshot = transport.snapshot()
-            if snapshot["sequence"] == last_sequence:
+            truth_frame = snapshot.get("emulator_truth", {}).get("frame")
+            truth_tick = truth_frame // 10 if isinstance(truth_frame, int) else None
+            state_key = (snapshot["sequence"], truth_tick)
+            if state_key == last_state_key:
                 await asyncio.sleep(0.010)
                 continue
-            last_sequence = snapshot["sequence"]
+            last_state_key = state_key
             try:
                 await ws.send_json(_hardware_payload("frame", snapshot))
             except (WebSocketDisconnect, RuntimeError):
@@ -1432,6 +1635,11 @@ def _hardware_payload(payload_type, snapshot):
     if (timing is not None and timing.get("wall_us", 0) > 0 and configuration is not None
             and timing.get("sector_count") == configuration["sectors"]):
         scan_rate_hz = 1_000_000.0 / timing["wall_us"]
+    transport_name = snapshot["transport"]
+    grid_source = (snapshot.get("acoustic_grid_mode", "deployment_contract")
+                   if transport_name == "acoustic-emulator"
+                   else "fast_emulator" if transport_name == "emulator"
+                   else "firmware_reported")
     return {
         "type": payload_type,
         "sequence": snapshot["sequence"],
@@ -1439,6 +1647,7 @@ def _hardware_payload(payload_type, snapshot):
         "mode": "hardware",
         "beam_method": "hardware_sector_scan",
         "transport": snapshot["transport"],
+        "grid_source": grid_source,
         "connected": snapshot["connected"],
         "configuration": configuration,
         "azimuth_deg": snapshot["azimuth_deg"],
@@ -1460,6 +1669,22 @@ def _hardware_payload(payload_type, snapshot):
         "margin_db": margin_db,
         "argmax_db": candidates[0][0] if candidates else None,
         "scan_rate_hz": scan_rate_hz,
+        "target_update_rate_hz": snapshot["target_update_rate_hz"],
+        "target_update_age_s": snapshot["target_update_age_s"],
+        "emulator_flight_profile": snapshot.get("emulator_flight_profile"),
+        "emulator_flight_speed": snapshot.get("emulator_flight_speed"),
+        "acoustic_cache_id": snapshot.get("acoustic_cache_id"),
+        "acoustic_scenario": snapshot.get("acoustic_scenario"),
+        "acoustic_calibrated": snapshot.get("acoustic_calibrated"),
+        "acoustic_model": snapshot.get("acoustic_model"),
+        "acoustic_measured_rt60_s": snapshot.get("acoustic_measured_rt60_s"),
+        "acoustic_preparation_seconds": snapshot.get("acoustic_preparation_seconds"),
+        "acoustic_detector_filter": snapshot.get("acoustic_detector_filter"),
+        "acoustic_exported_fir_status": snapshot.get("acoustic_exported_fir_status"),
+        "acoustic_grid": snapshot.get("acoustic_grid"),
+        "acoustic_grid_mode": snapshot.get("acoustic_grid_mode"),
+        "acoustic_room_cache_id": snapshot.get("acoustic_room_cache_id"),
+        "emulator_truth": snapshot.get("emulator_truth"),
     }
 
 

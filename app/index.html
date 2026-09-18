@@ -410,26 +410,111 @@
   </div>
 
   <div id="hardwareControls" class="hidden">
-    <div class="ctrl-row">
-      <label>Serial Port</label>
-      <div style="display:flex;gap:4px;">
-        <input type="text" id="hwSerialPort" placeholder="COM18" value="" style="flex:1;">
-        <button type="button" id="btnHwConnect" class="mat-preset-btn" style="width:auto;padding:4px 10px;margin:0;">Connect</button>
+    <div class="hw-control-section">
+      <div class="hw-section-label">LINK</div>
+      <div class="hw-link-grid">
+        <label>Serial Port<input type="text" id="hwSerialPort" placeholder="COM3" value=""></label>
+        <label>Baud<select id="hwSerialBaud">
+          <option value="921600" selected>921600</option>
+          <option value="115200">115200</option>
+        </select></label>
+      </div>
+      <div class="hw-command-grid hw-command-grid-three">
+        <button type="button" id="btnHwConnect" class="mat-preset-btn">Connect</button>
+        <button type="button" id="btnHwEmulator" class="mat-preset-btn">Emulator</button>
+        <button type="button" id="btnHwDisconnect" class="mat-preset-btn" disabled>Disconnect</button>
+      </div>
+      <div id="hwStatus" class="rt-status" role="status">Disconnected</div>
+    </div>
+
+    <div class="hw-control-section">
+      <div class="hw-section-label">OPERATE</div>
+      <div class="hw-command-grid">
+        <button type="button" id="btnHwOnce" class="mat-preset-btn hw-operational" disabled>Full Sweep</button>
+        <button type="button" id="btnHwContinuous" class="mat-preset-btn hw-operational" disabled>Continuous</button>
+        <button type="button" id="btnHwAdaptive" class="mat-preset-btn hw-operational" disabled>Track</button>
+        <button type="button" id="btnHwStop" class="mat-preset-btn hw-stop-button hw-operational" disabled>Stop</button>
+      </div>
+      <div class="ctrl-row">
+        <label>Sector</label>
+        <div class="hw-sector-row">
+          <input type="number" id="hwSector" min="0" value="24">
+          <button type="button" id="btnHwSteer" class="mat-preset-btn hw-operational" disabled>Steer</button>
+          <button type="button" id="btnHwMonitor" class="mat-preset-btn hw-operational" disabled>Monitor Beam</button>
+        </div>
       </div>
     </div>
-    <div class="ctrl-row">
-      <label>Baud</label>
-      <select id="hwSerialBaud">
-        <option value="921600" selected>921600</option>
-        <option value="115200">115200</option>
-      </select>
-    </div>
-    <div class="hw-command-grid">
-      <button type="button" id="btnHwEmulator" class="mat-preset-btn">Start Emulator</button>
-      <button type="button" id="btnHwDisconnect" class="mat-preset-btn">Disconnect</button>
-    </div>
-    <details class="advanced-settings hw-emulator-settings">
-      <summary>Emulator Grid</summary>
+
+    <label class="hw-advanced-toggle" for="hwAdvancedToggle">
+      <input type="checkbox" id="hwAdvancedToggle">
+      <span>Advanced controls</span>
+    </label>
+    <div id="hwAdvancedPanel" class="hw-advanced-panel hidden">
+      <div class="ctrl-row">
+        <label>Fixed-beam rate</label>
+        <select id="hwMonitorRate">
+          <option value="10">10 Hz</option>
+          <option value="20" selected>20 Hz</option>
+          <option value="50">50 Hz</option>
+        </select>
+      </div>
+      <div class="ctrl-row">
+        <label>dB Floor: <span id="hwDbFloorVal">-40</span> dB</label>
+        <input type="range" id="hwDbFloor" min="-60" max="-10" step="5" value="-40">
+      </div>
+      <div class="ctrl-row">
+        <label>View</label>
+        <select id="hwViewMode">
+          <option value="2d" selected>2D Heatmap</option>
+          <option value="3d">3D Visualiser</option>
+          <option value="split">Split (2D + 3D)</option>
+        </select>
+      </div>
+      <div class="check-row">
+        <input type="checkbox" id="hwCrtToggle">
+        <label>CRT scanlines</label>
+      </div>
+      <button type="button" id="btnHwPause" class="mat-preset-btn hw-operational" disabled>Freeze Display</button>
+      <div class="ctrl-row">
+        <label>Display Radius: <span id="hwDisplayRadiusVal">2.0</span> m</label>
+        <input type="range" id="hwDisplayRadius" min="0.5" max="5" step="0.1" value="2.0">
+      </div>
+      <div class="ctrl-row">
+        <label>Opacity: <span id="hwOpacityVal">0.70</span></label>
+        <input type="range" id="hwOpacity" min="0.1" max="1.0" step="0.05" value="0.70">
+      </div>
+      <div class="hw-section-label hw-emulator-label">EMULATOR SCENARIO</div>
+      <div class="ctrl-row">
+        <label>Emulator model</label>
+        <select id="hwEmulatorModel">
+          <option value="fast" selected>Fast kinematic</option>
+          <option value="acoustic">Acoustic room (cached)</option>
+        </select>
+      </div>
+      <div id="hwGridSource" class="hw-grid-source" role="note">Fast emulator grid · editable below</div>
+      <div id="hwFastScenarioSettings">
+      <div class="ctrl-row">
+        <label>Flight profile</label>
+        <select id="hwEmFlightProfile">
+          <option value="crossing" selected>Crossing pass</option>
+          <option value="approach">Approach and retreat</option>
+          <option value="orbit">Orbit</option>
+          <option value="patrol">Patrol</option>
+          <option value="evasive">Evasive stress</option>
+          <option value="legacy">Legacy angular sweep</option>
+        </select>
+      </div>
+      <div class="ctrl-row">
+        <label>Flight speed</label>
+        <select id="hwEmFlightSpeed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1.0×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2.0×</option>
+        </select>
+      </div>
+      </div>
+      <div class="hw-section-label hw-emulator-label">SIMULATION GRID AND FOV</div>
       <div class="hw-emulator-grid">
         <label>Rows<input type="number" id="hwEmRows" min="1" max="20" value="7"></label>
         <label>Columns<input type="number" id="hwEmColumns" min="1" max="20" value="7"></label>
@@ -438,74 +523,52 @@
         <label>El min<input type="number" id="hwEmElMin" min="-90" max="89" step="1" value="-60"></label>
         <label>El max<input type="number" id="hwEmElMax" min="-89" max="90" step="1" value="60"></label>
       </div>
-    </details>
-    <div id="hwStatus" class="rt-status">Checking hardware...</div>
-    <div class="hw-command-grid">
-      <button type="button" id="btnHwOnce" class="mat-preset-btn">Full Sweep</button>
-      <button type="button" id="btnHwContinuous" class="mat-preset-btn">Continuous</button>
-      <button type="button" id="btnHwAdaptive" class="mat-preset-btn">Track</button>
-      <button type="button" id="btnHwStop" class="mat-preset-btn">Stop</button>
-    </div>
-    <div class="ctrl-row">
-      <label>Sector</label>
-      <div style="display:flex;gap:4px;">
-        <input type="number" id="hwSector" min="0" value="24" style="flex:1;">
-        <button type="button" id="btnHwSteer" class="mat-preset-btn" style="width:auto;padding:4px 10px;margin:0;">Steer</button>
-        <button type="button" id="btnHwMeasure" class="mat-preset-btn" style="width:auto;padding:4px 10px;margin:0;">Measure Once</button>
+      <div id="hwAcousticScenarioSettings" class="hidden">
+        <div class="ctrl-row">
+          <label>Acoustic scenario</label>
+          <select id="hwAcousticScenario">
+            <option value="conference_evasive" selected>Conference room · evasive 2×</option>
+            <option value="handheld_2m_drone">Handheld 2 m · drone only</option>
+            <option value="handheld_2m_mixed">Handheld 2 m · crowd + speech</option>
+            <option value="stationary_2m">Stationary speaker · broadside 2 m</option>
+          </select>
+        </div>
+        <div class="hw-acoustic-actions">
+          <button type="button" id="btnHwAcousticPrepare" class="mat-preset-btn">Prepare Scene</button>
+          <button type="button" id="btnHwAcousticCancel" class="mat-preset-btn" disabled>Cancel</button>
+        </div>
+        <progress id="hwAcousticProgress" max="100" value="0"></progress>
+        <div id="hwAcousticStatus" class="rt-status">No acoustic cache prepared</div>
+        <div class="hw-section-label hw-emulator-label">AUDIO AUDITION</div>
+        <div class="hw-audition-row">
+          <select id="hwAuditionMode">
+            <option value="generated">Generated mix</option>
+            <option value="single_mic">Single microphone</option>
+            <option value="unsteered">Unsteered sum</option>
+            <option value="truth">Truth-steered beam</option>
+            <option value="selected" selected>Selected/tracked beam</option>
+          </select>
+          <button type="button" id="btnHwAudition" class="mat-preset-btn">Render 3 s</button>
+        </div>
+        <audio id="hwAuditionPlayer" controls preload="none"></audio>
+        <div class="hw-audition-footer">
+          <span id="hwAuditionStatus">No clip rendered</span>
+          <a id="hwAuditionDownload" class="hidden" download="heimdall-audition.wav">Download</a>
+        </div>
       </div>
     </div>
-    <div class="ctrl-row">
-      <label>Fixed-beam rate</label>
-      <div style="display:flex;gap:4px;">
-        <select id="hwMonitorRate" style="flex:1;">
-          <option value="10">10 Hz</option>
-          <option value="20" selected>20 Hz</option>
-          <option value="50">50 Hz</option>
-        </select>
-        <button type="button" id="btnHwMonitor" class="mat-preset-btn" style="width:auto;padding:4px 10px;margin:0;">Monitor Beam</button>
-      </div>
-    </div>
-    <div class="ctrl-row">
-      <label>dB Floor: <span id="hwDbFloorVal">-40</span> dB</label>
-      <input type="range" id="hwDbFloor" min="-60" max="-10" step="5" value="-40">
-    </div>
-    <div class="ctrl-row">
-      <label>View</label>
-      <select id="hwViewMode">
-        <option value="2d" selected>2D Heatmap</option>
-        <option value="3d">3D Visualiser</option>
-        <option value="split">Split (2D + 3D)</option>
-      </select>
-    </div>
-    <hr style="border-color:#333;margin:8px 0">
-    <div class="check-row">
-      <input type="checkbox" id="hwCrtToggle" checked>
-      <label>CRT Scanlines</label>
-    </div>
-    <div style="color:#888;font-size:10px;margin-bottom:4px">Ground Truth (optional)</div>
-    <div class="ctrl-row">
-      <label>True Az: <span id="hwTrueAzVal">—</span></label>
-      <input type="range" id="hwTrueAz" min="0" max="355" step="5" value="0" disabled>
-    </div>
-    <div class="ctrl-row">
-      <label>True El: <span id="hwTrueElVal">—</span></label>
-      <input type="range" id="hwTrueEl" min="-30" max="60" step="5" value="0" disabled>
-    </div>
-    <div class="check-row">
-      <input type="checkbox" id="hwTrueEnable">
-      <label>Show true direction</label>
-    </div>
-    <button type="button" id="btnHwPause" class="mat-preset-btn">Pause</button>
   </div>
 
-  <hr class="sep">
-  <div class="ctrl-row">
-    <label>Display Radius: <span id="dispRadVal">2.0</span> m</label>
-    <input type="range" id="dispRadius" min="0.5" max="5" step="0.1" value="2.0">
-  </div>
-  <div class="ctrl-row">
-    <label>Opacity: <span id="opacityVal">0.70</span></label>
-    <input type="range" id="opacity" min="0.1" max="1.0" step="0.05" value="0.70">
+  <div id="sharedDisplayControls">
+    <hr class="sep">
+    <div class="ctrl-row">
+      <label>Display Radius: <span id="dispRadVal">2.0</span> m</label>
+      <input type="range" id="dispRadius" min="0.5" max="5" step="0.1" value="2.0">
+    </div>
+    <div class="ctrl-row">
+      <label>Opacity: <span id="opacityVal">0.70</span></label>
+      <input type="range" id="opacity" min="0.1" max="1.0" step="0.05" value="0.70">
+    </div>
   </div>
 </div>
 
@@ -578,23 +641,49 @@
 <div id="hardwareWrap" class="hidden">
   <div class="hw-scanlines hidden" id="hwScanlines"></div>
   <div class="hw-vignette"></div>
-  <canvas id="hwBirdsEye" style="display:block;width:100%;height:calc(100% - 140px);cursor:crosshair;padding:20px;"></canvas>
-  <div id="hwMetricsWrap" style="position:fixed;bottom:155px;left:12px;display:flex;align-items:flex-start;gap:1px;z-index:50;">
-    <div id="hwMetrics" style="background:rgba(10,6,4,0.92);padding:10px 14px;border-radius:0;border:2px solid rgba(217,75,0,0.3);box-shadow:inset 0 0 0 1px #1a0a04;font-size:12px;color:#ffffff;line-height:1.7;min-width:220px;"></div>
-    <canvas id="hwSonar" width="18" height="18" style="margin-top:1px;margin-left:1px;"></canvas>
+  <div class="hw-visual-stage">
+    <canvas id="hwBirdsEye"></canvas>
+    <div class="hw-freshness-legend"><span class="fresh"></span>Fresh <span class="stale"></span>Stale <span class="empty"></span>Unmeasured</div>
   </div>
-  <div id="hwStatsLine" style="position:absolute;bottom:120px;left:0;right:0;height:18px;background:rgba(10,6,4,0.9);border-top:1px solid rgba(217,75,0,0.3);font-size:11px;color:#b89878;padding:2px 10px;z-index:4;"></div>
-  <div id="hwTimeline" style="position:absolute;bottom:0;left:0;right:0;height:120px;"><canvas id="hwTimelineCanvas" style="display:block;width:100%;height:100%;"></canvas></div>
+  <aside id="hwOpsRail">
+    <section class="hw-rail-section hw-solution-section">
+      <div class="hw-rail-heading">TARGET SOLUTION</div>
+      <div id="hwSolutionState" class="hw-solution-state">NO OBSERVATION</div>
+      <div id="hwSolutionDirection" class="hw-solution-direction">--.-° / --.-°</div>
+      <div id="hwSolutionMeta" class="hw-solution-meta">Waiting for measurements</div>
+      <div id="hwTruth" class="hw-truth hidden">
+        <div class="hw-truth-label">SCENARIO TRUTH <span id="hwTruthState">ACTIVE</span></div>
+        <strong id="hwTruthDirection">--.-° / --.-°</strong>
+        <div id="hwTruthMeta">Waiting for scenario position</div>
+      </div>
+      <div class="hw-rate-comparison">
+        <div><span>TRACK UPDATE</span><strong id="hwTrackRate">--</strong></div>
+        <div><span>FULL SCAN</span><strong id="hwFullScanRate">--</strong></div>
+      </div>
+      <div id="hwRateGain" class="hw-rate-gain">Waiting for target lock</div>
+    </section>
+    <section id="hwMetricsWrap" class="hw-rail-section hw-diagnostics-section">
+      <div class="hw-rail-heading">DIAGNOSTICS <canvas id="hwSonar" width="18" height="18"></canvas></div>
+      <div id="hwMetrics"></div>
+    </section>
+    <section class="hw-rail-section hw-events-section">
+      <div class="hw-rail-heading">EVENTS <button type="button" id="btnHwClearEvents">Clear</button></div>
+      <div id="hwEventLog" role="log" aria-live="polite"><div class="hw-event-empty">No session events</div></div>
+    </section>
+  </aside>
+  <div id="hwStatsLine">No measurements received</div>
+  <div id="hwTimeline"><canvas id="hwTimelineCanvas"></canvas></div>
 </div>
 
 <div id="hwHeaderBar" class="hidden">
-  <span>UTC: <span id="hbTime">--:--:--</span></span>
-  <span class="hb-sep">|</span>
-  <span>ARRAY: <span id="hbArray">--</span></span>
-  <span class="hb-sep">|</span>
-  <span>PORT: <span id="hbPort">--</span></span>
-  <span class="hb-sep">|</span>
-  <span class="hb-status">STATUS: <span id="hbStatus">IDLE</span></span>
+  <span class="hw-brand">HEIMDALL</span>
+  <span class="hw-ready-item"><span class="hw-ready-label">LINK</span><span id="hbLink" class="hw-state disconnected">OFFLINE</span></span>
+  <span class="hw-ready-item"><span class="hw-ready-label">SOURCE</span><span id="hbPort">--</span></span>
+  <span class="hw-ready-item"><span class="hw-ready-label">ARRAY</span><span id="hbArray">--</span></span>
+  <span class="hw-ready-item"><span class="hw-ready-label">MODE</span><span id="hbStatus">IDLE</span></span>
+  <span class="hw-ready-item"><span class="hw-ready-label">SAMPLE AGE</span><span id="hbAge">--</span></span>
+  <span class="hw-ready-item"><span class="hw-ready-label">WARNINGS</span><span id="hbWarnings">0</span></span>
+  <span class="hw-ready-clock">UTC <span id="hbTime">--:--:--</span></span>
 </div>
 <script type="module" src="js/main.js"></script>
 </body>
