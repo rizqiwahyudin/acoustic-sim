@@ -2831,7 +2831,8 @@ function renderHwMetrics(frame) {
       : '';
     const acoustic = frame.acoustic_cache_id
       ? `<br>Acoustic: <span class="val">${frame.acoustic_scenario}</span> · RT60 ${Number(frame.acoustic_measured_rt60_s).toFixed(2)} s · ${frame.acoustic_calibrated ? 'calibrated' : 'uncalibrated'}` +
-        `<br>Detector: <span class="val">intended 1–4 kHz FIR</span> · SigmaStudio export mismatch`
+        `<br>Detector: <span class="val">exported order-10 1 kHz HP + 4 kHz LP FIR</span>` +
+        `<br>Parity: <span class="val">DSP/control</span> · analog uncalibrated · empirical late reverb`
       : '';
     const margin = Number.isFinite(frame.margin_db) ? `${frame.margin_db.toFixed(1)} dB` : '—';
     const azimuthEdges = frame.azimuth_deg.length ? hwAngularEdges(frame.azimuth_deg, 10) : [];
