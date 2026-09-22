@@ -2354,10 +2354,6 @@
       0
     ]
   ],
-  "fir_stage_modes": [
-    "highpass",
-    "lowpass"
-  ],
   "max_delay_samples": 68,
   "microphone_positions_mm": [
     [

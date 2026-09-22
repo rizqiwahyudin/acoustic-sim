@@ -17,12 +17,12 @@ import numpy as np
 import pyroomacoustics as pra
 from scipy.fft import next_fast_len
 from scipy.io import wavfile
-from scipy.signal import fftconvolve, resample_poly
+from scipy.signal import fftconvolve, firwin, resample_poly
 
 from acoustic_utils import air_absorption_kwargs, spl_to_amplitude
 
 
-ACOUSTIC_MODEL_VERSION = "heimdall-acoustic-v9"
+ACOUSTIC_MODEL_VERSION = "heimdall-acoustic-v7"
 ROOM_CACHE_MODEL_VERSION = "heimdall-room-v1"
 DEFAULT_CONTRACT_PATH = Path(__file__).resolve().parent / "data" / "heimdall_acoustic_contract.json"
 DEFAULT_FIRMWARE_HEADER_PATH = Path(__file__).resolve().parents[1] / "MAX78002" / "beam_table_2d.h"
@@ -50,6 +50,10 @@ class AcousticScenario:
     speech_enabled: bool = True
     speech_spl_db: float = 72.0
     microphone_noise_spl_db: float = 30.0
+    detector_gain: float = 24.0
+    detector_highpass_hz: float = 1000.0
+    detector_lowpass_hz: float = 4000.0
+    detector_fir_taps: int = 129
     seed: int = 78002
 
     def validate(self) -> None:
@@ -76,6 +80,10 @@ class AcousticScenario:
             raise ValueError("drone_waypoints must be between 1 and 32")
         if not 0 <= self.crowd_talkers <= 64:
             raise ValueError("crowd_talkers must be between 0 and 64")
+        if not 0.0 < self.detector_highpass_hz < self.detector_lowpass_hz < 24000.0:
+            raise ValueError("detector passband must satisfy 0 < highpass < lowpass < 24 kHz")
+        if self.detector_fir_taps < 3 or self.detector_fir_taps % 2 == 0:
+            raise ValueError("detector_fir_taps must be an odd number of at least 3")
 
 
 @dataclass(frozen=True)
@@ -96,7 +104,6 @@ class BeamContract:
     delay_fixpt: np.ndarray
     delay_samples: np.ndarray
     fir_stages: tuple[np.ndarray, ...]
-    fir_stage_modes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -213,9 +220,6 @@ def load_beam_contract(path=DEFAULT_CONTRACT_PATH,
         fir_stages.append(coefficients)
     if len(fir_stages) != 2:
         raise ValueError("beam contract must contain two common FIR stages")
-    fir_stage_modes = tuple(data.get("fir_stage_modes", ()))
-    if fir_stage_modes != ("highpass", "lowpass"):
-        raise ValueError("beam contract FIR stage modes must be highpass then lowpass")
 
     return BeamContract(
         path=path,
@@ -234,7 +238,6 @@ def load_beam_contract(path=DEFAULT_CONTRACT_PATH,
         delay_fixpt=delay_fixpt,
         delay_samples=delay_samples,
         fir_stages=tuple(fir_stages),
-        fir_stage_modes=fir_stage_modes,
     )
 
 
@@ -433,13 +436,24 @@ def _room_rirs(source: np.ndarray, microphones: np.ndarray, scenario: AcousticSc
 
 def _combined_fir(contract: BeamContract) -> np.ndarray:
     result = np.asarray((1.0,), dtype=np.float64)
-    for stage, mode in zip(contract.fir_stages, contract.fir_stage_modes):
-        effective_stage = stage
-        if mode == "highpass":
-            effective_stage = -stage.copy()
-            effective_stage[effective_stage.size // 2] += 1.0
-        result = np.convolve(result, effective_stage)
+    for stage in contract.fir_stages:
+        result = np.convolve(result, stage)
     return result
+
+
+def _detector_bandpass_fir(scenario: AcousticScenario, sampling_rate_hz: int) -> np.ndarray:
+    highpass = firwin(
+        scenario.detector_fir_taps,
+        scenario.detector_highpass_hz,
+        pass_zero=False,
+        fs=sampling_rate_hz,
+    )
+    lowpass = firwin(
+        scenario.detector_fir_taps,
+        scenario.detector_lowpass_hz,
+        fs=sampling_rate_hz,
+    )
+    return np.convolve(highpass, lowpass)
 
 
 def _microphone_transfer_bins(rirs: list[np.ndarray], signal_fft_size: int) -> np.ndarray:
@@ -456,26 +470,18 @@ def _microphone_transfer_bins(rirs: list[np.ndarray], signal_fft_size: int) -> n
     return microphone_transfer[:, transfer_bins]
 
 
-def _beam_transfer(contract: BeamContract, microphone_transfer: np.ndarray,
-                   signal_fft_size: int,
-                   detector_fir: np.ndarray | None = None) -> np.ndarray:
+def _beam_transfer_powers(contract: BeamContract, microphone_transfer: np.ndarray,
+                          signal_fft_size: int,
+                          detector_fir: np.ndarray | None = None) -> np.ndarray:
     frequencies = np.fft.rfftfreq(signal_fft_size, 1.0 / contract.sampling_rate_hz)
     phase = np.exp(
         -2j * np.pi * frequencies[None, None, :]
         * contract.delay_samples[:, :, None] / contract.sampling_rate_hz
     )
-    effective = np.sum(microphone_transfer[None, :, :] * phase, axis=1)
+    effective = np.mean(microphone_transfer[None, :, :] * phase, axis=1)
     fir = _combined_fir(contract) if detector_fir is None else detector_fir
     fir_response = np.fft.rfft(fir, signal_fft_size)
-    return effective * fir_response[None, :]
-
-
-def _beam_transfer_powers(contract: BeamContract, microphone_transfer: np.ndarray,
-                          signal_fft_size: int,
-                          detector_fir: np.ndarray | None = None) -> np.ndarray:
-    return np.square(np.abs(
-        _beam_transfer(contract, microphone_transfer, signal_fft_size, detector_fir)
-    ))
+    return np.square(np.abs(effective * fir_response[None, :]))
 
 
 def _effective_transfer_powers(contract: BeamContract, rirs: list[np.ndarray],
@@ -509,7 +515,7 @@ def _plane_wave_transfer_powers(contract: BeamContract, directions: np.ndarray,
         -2j * np.pi * frequencies[None, None, :]
         * contract.delay_samples[:, :, None] / contract.sampling_rate_hz
     )
-    response = np.sum(
+    response = np.mean(
         acoustic_phase[:, None, :, :] * steering_phase[None, :, :, :], axis=2
     )
     fir = _combined_fir(contract) if detector_fir is None else detector_fir
@@ -588,17 +594,6 @@ def _wrapped_segment(samples: np.ndarray, start: int, length: int) -> np.ndarray
     return samples[indices]
 
 
-def _interpolate_transfer(transfers: np.ndarray, elapsed_s: float,
-                          scenario: AcousticScenario) -> np.ndarray:
-    if scenario.scenario == "stationary_2m":
-        return transfers[0]
-    position = (elapsed_s / _trajectory_period_s(scenario)) * len(transfers)
-    low = int(math.floor(position)) % len(transfers)
-    high = (low + 1) % len(transfers)
-    ratio = position - math.floor(position)
-    return (1.0 - ratio) * transfers[low] + ratio * transfers[high]
-
-
 def _render_source_to_microphones(signal: np.ndarray,
                                   microphone_transfer: np.ndarray) -> np.ndarray:
     impulse_length = (microphone_transfer.shape[1] - 1) * 2
@@ -618,7 +613,7 @@ def _beamform_microphone_audio(signals: np.ndarray, delay_samples: np.ndarray,
     phase = np.exp(
         -2j * np.pi * frequencies[None, :] * delay_samples[:, None] / sampling_rate_hz
     )
-    return np.fft.irfft(np.sum(spectra * phase, axis=0), fft_size)[:signals.shape[1]]
+    return np.fft.irfft(np.mean(spectra * phase, axis=0), fft_size)[:signals.shape[1]]
 
 
 def _direction_delay_samples(contract: BeamContract, azimuth_deg: float,
@@ -658,7 +653,7 @@ def render_acoustic_audition(cache: AcousticCache, start_s: float = 0.0,
         raise ValueError("selected audition sector is outside the acoustic grid")
     room_cache = load_room_acoustic_cache(cache.manifest["room_cache_id"], room_cache_root)
     signal_fft_size = int(room_cache.manifest["signal_fft_size"])
-    detector_fir = _combined_fir(contract)
+    detector_fir = _detector_bandpass_fir(scenario, contract.sampling_rate_hz)
     detector_response = np.fft.rfft(detector_fir, signal_fft_size)
     sample_count = int(round(duration_s * contract.sampling_rate_hz))
     start_sample = int(round(float(start_s) * contract.sampling_rate_hz))
@@ -668,11 +663,11 @@ def render_acoustic_audition(cache: AcousticCache, start_s: float = 0.0,
     drone_signal = _wrapped_segment(drone, start_sample, sample_count) \
         * spl_to_amplitude(scenario.drone_spl_db)
     midpoint_s = float(start_s) + duration_s / 2.0
-    drone_transfer = _interpolate_transfer(
-        np.asarray(room_cache.microphone_transfer[:scenario.drone_waypoints]),
-        midpoint_s,
-        scenario,
-    ) * detector_response[None, :]
+    waypoint_position = (midpoint_s / _trajectory_period_s(scenario)) \
+        * scenario.drone_waypoints
+    drone_index = int(round(waypoint_position)) % scenario.drone_waypoints
+    drone_transfer = np.asarray(room_cache.microphone_transfer[drone_index]) \
+        * detector_response[None, :]
     microphone_audio = _render_source_to_microphones(drone_signal, drone_transfer)
     generated_mix = fftconvolve(drone_signal, detector_fir, mode="same")
 
@@ -723,7 +718,7 @@ def render_acoustic_audition(cache: AcousticCache, start_s: float = 0.0,
         "clips": {
             "generated": generated_mix,
             "single_mic": microphone_audio[0],
-            "unsteered": np.sum(microphone_audio, axis=0),
+            "unsteered": np.mean(microphone_audio, axis=0),
             "truth": _beamform_microphone_audio(
                 microphone_audio,
                 _direction_delay_samples(deployment, truth_azimuth, truth_elevation),
@@ -931,7 +926,7 @@ def prepare_acoustic_cache(scenario=AcousticScenario(), contract_path=DEFAULT_CO
     directory.mkdir(parents=True, exist_ok=True)
     frame_samples = int(round(scenario.level_step_s * 48000))
     signal_fft_size = next_fast_len(max(512, frame_samples * 2))
-    detector_fir = _combined_fir(contract)
+    detector_fir = _detector_bandpass_fir(scenario, contract.sampling_rate_hz)
     drone = load_audio_48k(drone_path, scenario.duration_s)
     crowd = load_audio_48k(crowd_path, scenario.duration_s)
     room_cache = prepare_room_acoustic_cache(
@@ -945,11 +940,10 @@ def prepare_acoustic_cache(scenario=AcousticScenario(), contract_path=DEFAULT_CO
     if int(room_cache.manifest["signal_fft_size"]) != signal_fft_size:
         raise ValueError("room cache FFT size does not match detector projection")
     source_positions = np.asarray(room_cache.manifest["source_positions_m"], dtype=np.float64)
-    beam_transfers = [
-        _beam_transfer(contract, microphone_transfer, signal_fft_size, detector_fir)
+    transfer_powers = [
+        _beam_transfer_powers(contract, microphone_transfer, signal_fft_size, detector_fir)
         for microphone_transfer in room_cache.microphone_transfer
     ]
-    transfer_powers = [np.square(np.abs(transfer)) for transfer in beam_transfers]
 
     _progress(progress, "spectral-beamforming", 0, 3, started)
     drone_spectrum = _window_spectral_power(drone, frame_samples, signal_fft_size)
@@ -967,7 +961,7 @@ def prepare_acoustic_cache(scenario=AcousticScenario(), contract_path=DEFAULT_CO
             signal_fft_size,
         )
     else:
-        drone_transfers = np.stack(beam_transfers[:len(source_positions)])
+        drone_transfers = np.stack(transfer_powers[:len(source_positions)])
         route_period_s = _trajectory_period_s(scenario)
         for frame in range(frame_count):
             elapsed_s = frame * scenario.level_step_s
@@ -975,9 +969,7 @@ def prepare_acoustic_cache(scenario=AcousticScenario(), contract_path=DEFAULT_CO
             low = int(math.floor(position)) % len(source_positions)
             high = (low + 1) % len(source_positions)
             ratio = position - math.floor(position)
-            transfer = np.square(np.abs(
-                (1.0 - ratio) * drone_transfers[low] + ratio * drone_transfers[high]
-            ))
+            transfer = (1.0 - ratio) * drone_transfers[low] + ratio * drone_transfers[high]
             levels_power[frame] += _levels_from_spectra(
                 drone_spectrum[frame:frame + 1]
                 * spl_to_amplitude(scenario.drone_spl_db) ** 2,
@@ -997,9 +989,7 @@ def prepare_acoustic_cache(scenario=AcousticScenario(), contract_path=DEFAULT_CO
                 low = int(math.floor(position)) % len(source_positions)
                 high = (low + 1) % len(source_positions)
                 ratio = position - math.floor(position)
-                transfer = np.square(np.abs(
-                    (1.0 - ratio) * drone_transfers[low] + ratio * drone_transfers[high]
-                ))
+                transfer = (1.0 - ratio) * drone_transfers[low] + ratio * drone_transfers[high]
                 drone_only[frame] = _levels_from_spectra(
                     drone_spectrum[frame:frame + 1]
                     * spl_to_amplitude(scenario.drone_spl_db) ** 2,
@@ -1036,8 +1026,8 @@ def prepare_acoustic_cache(scenario=AcousticScenario(), contract_path=DEFAULT_CO
 
     _progress(progress, "detector", 0, 1, started)
     noise_pressure = spl_to_amplitude(scenario.microphone_noise_spl_db)
-    levels_power += np.square(noise_pressure * math.sqrt(contract.microphones))
-    rms = np.sqrt(np.maximum(levels_power, 0.0))
+    levels_power += np.square(noise_pressure / math.sqrt(contract.microphones))
+    rms = np.sqrt(np.maximum(levels_power, 0.0)) * scenario.detector_gain
     rms = apply_detector_envelope(rms, scenario.level_step_s)
     levels_raw = np.clip(np.rint(rms * (1 << 24)), 0, 0x7FFFFFFF).astype(np.uint32)
     _progress(progress, "detector", 1, 1, started)
@@ -1064,11 +1054,13 @@ def prepare_acoustic_cache(scenario=AcousticScenario(), contract_path=DEFAULT_CO
         "measured_rt60_s": room_cache.manifest.get("measured_rt60_s"),
         "acoustic_method": "order-2 early reflections plus deterministic diffuse RT60 tail",
         "crowd_method": "12-direction diffuse plane-wave field",
-        "detector_filter": "SigmaStudio exported order-10 1 kHz HP + 4 kHz LP FIR cascade",
-        "exported_fir_status": "applied with highpass then lowpass stage semantics",
-        "parity_scope": (
-            "deployed delays, FIR topology, unity-gain sum, envelope settings, "
-            "sequential policy; uncalibrated analog sensitivity and empirical late reverb"
+        "detector_filter": (
+            f"intended two-stage linear-phase FIR, {scenario.detector_fir_taps} taps/stage, "
+            f"{scenario.detector_highpass_hz:g}-{scenario.detector_lowpass_hz:g} Hz"
+        ),
+        "exported_fir_status": (
+            "not applied: SigmaStudio export has both stages bypass-enabled and both "
+            "coefficient sets are low-pass"
         ),
     }
 
@@ -1135,7 +1127,6 @@ class AcousticCacheLevelProvider:
             "acoustic_preparation_seconds": self.cache.manifest.get("preparation_seconds"),
             "acoustic_detector_filter": self.cache.manifest.get("detector_filter"),
             "acoustic_exported_fir_status": self.cache.manifest.get("exported_fir_status"),
-            "acoustic_parity_scope": self.cache.manifest.get("parity_scope"),
             "acoustic_grid": self.cache.manifest.get("grid"),
             "acoustic_grid_mode": self.cache.manifest.get("grid_mode", "deployment_contract"),
             "acoustic_room_cache_id": self.cache.manifest.get("room_cache_id"),

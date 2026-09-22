@@ -1681,7 +1681,6 @@ def _hardware_payload(payload_type, snapshot):
         "acoustic_preparation_seconds": snapshot.get("acoustic_preparation_seconds"),
         "acoustic_detector_filter": snapshot.get("acoustic_detector_filter"),
         "acoustic_exported_fir_status": snapshot.get("acoustic_exported_fir_status"),
-        "acoustic_parity_scope": snapshot.get("acoustic_parity_scope"),
         "acoustic_grid": snapshot.get("acoustic_grid"),
         "acoustic_grid_mode": snapshot.get("acoustic_grid_mode"),
         "acoustic_room_cache_id": snapshot.get("acoustic_room_cache_id"),

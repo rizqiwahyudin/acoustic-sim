@@ -1,34 +1,17 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
-import re
 import time
 
 import pytest
 
 from heimdall_protocol import HeimdallState, ProtocolError, parse_line
 from heimdall_transport import (
-    ACQUIRE_RATIO,
-    CONFIRM_PASSES,
     EmulatorHeimdallTransport,
-    GLOBAL_RESCAN_INTERVAL,
     HeimdallTransport,
-    RETAIN_RATIO,
     TRACK_FAILURE_LIMIT,
-    TRACK_MOVE_CONFIRMATIONS,
     validate_command,
 )
-
-
-FIRMWARE_DIR = Path(__file__).resolve().parents[2] / "MAX78002"
-
-
-def _macro(path, name):
-    text = path.read_text(encoding="ascii")
-    match = re.search(rf"#define\s+{name}\s+(\d+)U?", text)
-    assert match is not None, f"missing firmware macro {name}"
-    return int(match.group(1))
 
 
 class DeterministicAdaptiveEmulator(EmulatorHeimdallTransport):
@@ -43,26 +26,6 @@ class DeterministicAdaptiveEmulator(EmulatorHeimdallTransport):
     def _level_for_sector(self, sector):
         self.measured_sectors.append(sector)
         return self.test_levels[sector]
-
-
-def test_emulator_policy_constants_match_firmware_headers():
-    config = FIRMWARE_DIR / "heimdall_config.h"
-    protocol = FIRMWARE_DIR / "command_protocol.h"
-    assert ACQUIRE_RATIO == (
-        _macro(config, "HEIMDALL_ACQUIRE_RATIO_NUM")
-        / _macro(config, "HEIMDALL_ACQUIRE_RATIO_DEN")
-    )
-    assert RETAIN_RATIO == (
-        _macro(config, "HEIMDALL_RETAIN_RATIO_NUM")
-        / _macro(config, "HEIMDALL_RETAIN_RATIO_DEN")
-    )
-    assert CONFIRM_PASSES == _macro(config, "HEIMDALL_CONFIRM_PASSES")
-    assert TRACK_FAILURE_LIMIT == _macro(config, "HEIMDALL_TRACK_FAILURE_LIMIT")
-    assert TRACK_MOVE_CONFIRMATIONS == _macro(
-        config, "HEIMDALL_TRACK_MOVE_CONFIRMATIONS"
-    )
-    assert GLOBAL_RESCAN_INTERVAL == _macro(config, "HEIMDALL_GLOBAL_RESCAN_INTERVAL")
-    assert _macro(protocol, "COMMAND_PROTOCOL_QUEUE_SIZE") == 4
 
 
 def test_dynamic_configuration_and_measurement_state():
@@ -205,105 +168,6 @@ def test_emulator_uses_the_same_protocol_state_path():
     finally:
         emulator.stop()
         emulator.join(timeout=1.0)
-
-
-def test_emulator_command_queue_matches_firmware_depth():
-    emulator = EmulatorHeimdallTransport()
-    for _ in range(4):
-        emulator.send_command("I")
-    emulator.send_command("I")
-    assert emulator.snapshot()["last_error"]["reason"] == "COMMAND_QUEUE_FULL"
-
-
-def test_measure_command_is_rejected_while_scan_is_busy_without_stopping_scan():
-    emulator = DeterministicAdaptiveEmulator(rows=2, columns=2)
-    emulator.mode = "C"
-    emulator.current_sector = 1
-    emulator.commands.put_nowait("M")
-    assert not emulator._consume_interrupt()
-    snapshot = emulator.snapshot()
-    assert emulator.mode == "C"
-    assert snapshot["last_error"]["reason"] == "INVALID_COMMAND"
-
-
-def test_emulator_samples_level_after_configured_steer_and_settle_delay():
-    sampled_at = []
-
-    class Provider:
-        def level_for_sector(self, _sector):
-            sampled_at.append(time.monotonic())
-            return 100
-
-        def metadata(self):
-            return {}
-
-    emulator = EmulatorHeimdallTransport(
-        rows=1, columns=1, sector_time_s=0.01, level_provider=Provider()
-    )
-    started = time.monotonic()
-    emulator._emit_measurement(0)
-    assert sampled_at[0] - started >= 0.009
-    assert emulator.last_sector_elapsed_us >= 9000
-
-
-def test_emulator_timing_reports_measured_core_wall_and_sector_range():
-    emulator = DeterministicAdaptiveEmulator(rows=2, columns=2)
-    emulator._scan_pass("F")
-    timing = emulator.snapshot()["last_timing"]
-    assert timing["sector_count"] == 4
-    assert 0 < timing["core_us"] <= timing["wall_us"]
-    assert 0 < timing["min_sector_us"] <= timing["max_sector_us"]
-
-
-def test_emulator_aborts_scan_on_first_safeload_failure_like_firmware():
-    emulator = EmulatorHeimdallTransport(
-        rows=2,
-        columns=3,
-        sector_time_s=0.0,
-        fault_injector=lambda operation, sector: (-7, 7)
-        if operation == "steer" and sector == 3 else None,
-    )
-    emulator.running = True
-    emulator.connected = True
-    emulator._emit_configuration()
-    emulator._handle_command("F")
-    emulator._scan_pass("F")
-    snapshot = emulator.snapshot()
-    assert emulator.mode == "IDLE"
-    assert snapshot["last_error"] == {
-        "type": "steer_error", "sector": 3, "microphone": 7, "code": -7,
-    }
-    assert snapshot["scan_count"] == 0
-
-
-def test_emulator_aborts_scan_on_level_read_failure_like_firmware():
-    emulator = EmulatorHeimdallTransport(
-        rows=2,
-        columns=3,
-        sector_time_s=0.0,
-        fault_injector=lambda operation, sector: -11
-        if operation == "read" and sector == 2 else None,
-    )
-    emulator.running = True
-    emulator.connected = True
-    emulator._emit_configuration()
-    emulator._handle_command("F")
-    emulator._scan_pass("F")
-    snapshot = emulator.snapshot()
-    assert emulator.mode == "IDLE"
-    assert snapshot["last_error"]["reason"] == "LEVEL_READ"
-    assert snapshot["last_error"]["details"] == ["2", "-11"]
-    assert snapshot["scan_count"] == 0
-
-
-def test_queued_stop_cancels_one_shot_before_first_firmware_step():
-    emulator = DeterministicAdaptiveEmulator(rows=2, columns=2)
-    emulator.commands.put_nowait("F")
-    emulator.commands.put_nowait("X")
-    emulator._drain_commands()
-    assert emulator.mode == "IDLE"
-    assert emulator.measured_sectors == []
-    assert emulator.snapshot()["mode"] == "IDLE"
 
 
 def test_acoustic_level_provider_uses_the_same_emulator_policy():

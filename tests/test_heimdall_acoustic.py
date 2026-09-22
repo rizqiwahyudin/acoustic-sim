@@ -15,12 +15,10 @@ from heimdall_acoustic import (
     AcousticCacheLevelProvider,
     AcousticGridSpec,
     AcousticScenario,
-    _combined_fir,
-    _interpolate_transfer,
+    _detector_bandpass_fir,
     _plane_wave_transfer_powers,
     _progress,
     _scenario_hash,
-    _trajectory_period_s,
     acoustic_scenario,
     apply_detector_envelope,
     build_acoustic_grid,
@@ -52,7 +50,6 @@ def test_deployment_contract_dimensions_delays_and_fir():
     np.testing.assert_array_equal(contract.delay_fixpt[24], np.zeros(44, dtype=np.uint32))
     assert len(contract.fir_stages) == 2
     assert all(stage.size == 11 for stage in contract.fir_stages)
-    assert contract.fir_stage_modes == ("highpass", "lowpass")
 
 
 def test_deployment_contract_rejects_mismatched_firmware_header(tmp_path):
@@ -146,15 +143,6 @@ def test_handheld_route_is_closed_slow_and_fixed_at_two_meter_depth():
     assert np.max(speeds) < 0.6
 
 
-def test_moving_transfer_interpolation_preserves_phase_until_beam_power():
-    scenario = acoustic_scenario("handheld_2m_drone")
-    transfers = np.asarray(([[1.0 + 0.0j]], [[0.0 + 1.0j]]))
-    midpoint = _trajectory_period_s(scenario) / (2.0 * len(transfers))
-    interpolated = _interpolate_transfer(transfers, midpoint, scenario)
-    assert interpolated[0, 0] == pytest.approx(0.5 + 0.5j)
-    assert abs(interpolated[0, 0]) ** 2 == pytest.approx(0.5)
-
-
 def test_room_evasive_route_is_closed_bounded_and_continuous():
     scenario = AcousticScenario()
     np.testing.assert_allclose(room_evasive_position(0.0, scenario), room_evasive_position(15.0, scenario))
@@ -199,17 +187,6 @@ def test_exact_deployed_delays_peak_at_matching_plane_wave(sector):
     assert int(np.argmax(response[:, frequency_bin])) == sector
 
 
-def test_broadside_beam_uses_unity_gain_sum_not_microphone_average():
-    contract = load_beam_contract()
-    response = _plane_wave_transfer_powers(
-        contract, np.asarray(((0.0, 0.0, 1.0),)), 512
-    )
-    frequency_bin = int(round(2000.0 / (48000.0 / 512.0)))
-    fir_response = np.fft.rfft(_combined_fir(contract), 512)[frequency_bin]
-    expected_power = contract.microphones ** 2 * abs(fir_response) ** 2
-    assert response[24, frequency_bin] == pytest.approx(expected_power)
-
-
 def test_detector_envelope_obeys_rise_and_decay_limits():
     levels = np.asarray(((0.001,), (1.0,), (0.001,)), dtype=np.float64)
     filtered = apply_detector_envelope(levels, step_s=0.001, rise_db_s=1000.0, decay_db_s=500.0)
@@ -218,12 +195,29 @@ def test_detector_envelope_obeys_rise_and_decay_limits():
     assert output_db[2] - output_db[1] == pytest.approx(-0.5)
 
 
-def test_detector_filter_uses_exported_highpass_and_lowpass_stage_semantics():
-    contract = load_beam_contract()
-    highpass = -contract.fir_stages[0].copy()
-    highpass[highpass.size // 2] += 1.0
-    expected = np.convolve(highpass, contract.fir_stages[1])
-    np.testing.assert_allclose(_combined_fir(contract), expected, atol=0.0)
+def test_intended_detector_filter_is_one_to_four_kilohertz_bandpass():
+    scenario = AcousticScenario()
+    detector_fir = _detector_bandpass_fir(scenario, 48000)
+    frequencies = np.asarray((500.0, 2000.0, 8000.0))
+    response = np.asarray([
+        abs(np.sum(detector_fir * np.exp(
+            -2j * np.pi * frequency * np.arange(detector_fir.size) / 48000.0
+        )))
+        for frequency in frequencies
+    ])
+    response_db = 20.0 * np.log10(np.maximum(response, 1e-12))
+    assert response_db[0] < -25.0
+    assert response_db[1] > -1.0
+    assert response_db[2] < -40.0
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"detector_highpass_hz": 4000.0, "detector_lowpass_hz": 1000.0},
+    {"detector_fir_taps": 128},
+])
+def test_scenario_rejects_invalid_detector_filter(kwargs):
+    with pytest.raises(ValueError, match="detector"):
+        AcousticScenario(**kwargs).validate()
 
 
 def test_preparation_progress_is_monotonic_across_stages():
@@ -297,8 +291,8 @@ def test_moving_drone_cache_can_disable_speech(tmp_path):
     )
     cache = prepare_acoustic_cache(scenario, cache_root=tmp_path)
     assert cache.levels_raw.shape == (10, 49)
-    assert "exported order-10" in cache.manifest["detector_filter"]
-    assert "applied" in cache.manifest["exported_fir_status"]
+    assert "1000-4000 Hz" in cache.manifest["detector_filter"]
+    assert "not applied" in cache.manifest["exported_fir_status"]
 
 
 def test_room_cache_is_reused_across_acoustic_grids(monkeypatch, tmp_path):

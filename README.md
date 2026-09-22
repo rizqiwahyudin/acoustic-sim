@@ -88,17 +88,17 @@ Hardware -> Advanced controls -> Emulator model also offers `Acoustic room
 (cached)`. It replaces the fast Gaussian level provider with cached detector
 levels generated from `drone.wav`, `crowd.wav`, a 48 kHz room model, the exact
 44-microphone DSP-order geometry, the deployed `beam_table_2d.h` delays, and the
-exported SigmaStudio 1 kHz high-pass / 4 kHz low-pass FIR stages. It still uses the same firmware-equivalent
+intended 1-4 kHz detector band-pass. It still uses the same firmware-equivalent
 commands and adaptive state machine.
 
-The detector filter uses the exported order-10 FIR coefficient prototypes.
-Stage 1 is applied with the High Pass spectral-inversion topology visible in
-SigmaStudio; Stage 2 is applied directly as Low Pass. The unity-gain output uses
-the 44-channel sum before the exported 10,000 dB/s RMS envelope, matching the
-current DSP graph. Because the filters are only order 10, the effective exported
-cascade is gradual rather than an ideal 1-4 kHz brick-wall response (about
--4.8 dB at DC, -5.0 dB at 1 kHz, -7.2 dB at 4 kHz, and -17.2 dB at 8 kHz).
-Absolute ADC/microphone scaling remains uncalibrated.
+The detector band-pass is modeled as two 129-tap linear-phase FIR stages: a
+1 kHz high-pass followed by a 4 kHz low-pass. It is applied to drone, crowd, and
+speech energy before RMS envelope generation and therefore before the MAX78002
+emulator receives detector values. The current SigmaStudio export does not
+match this intended configuration: both FIR blocks are marked bypass-enabled
+and both exported coefficient arrays are low-pass kernels. Regenerate and
+deploy the ADAU1467 project with an enabled high-pass/low-pass pair before using
+the acoustic result as exact hardware-filter parity.
 
 Available scenarios:
 
@@ -127,12 +127,14 @@ RIR result. Measured stationary reprojection took about 0.4 s for 9x11 and 1.0 s
 for 20x20 after a 3.0 s room build.
 
 The fixed-depth handheld diagnostic preserves the real sequential sector scan.
-With the 2.8 ms emulator sector time and audited exported-filter/summed-array
-path, completed 49-sector sweeps localized within one grid cell of scenario
-truth in 65.1% of drone-only sweeps and 49.5% of mixed crowd/speech sweeps.
-Coherent all-sector reference frames scored 96.9% and 86.2%, respectively. The
-source remained at 2 m broadside depth; its true
+With the 2.8 ms emulator sector time, the completed 49-sector sweeps localized
+within one grid cell of scenario truth in 85.8% of drone-only sweeps and 79.8%
+of mixed crowd/speech sweeps. Coherent all-sector reference frames scored 98.2%
+and 91.4%, respectively. The source remained at 2 m broadside depth; its true
 slant range varied from 2.05 to 2.30 m as it moved laterally and vertically.
+In browser acceptance, 12 consecutive adaptive Track samples stayed within one
+grid cell for both variants, with median center-angle errors of 7.0 degrees
+drone-only and 8.6 degrees mixed.
 
 After status becomes `Ready`, click `Acoustic`, then use the normal
 `Full Sweep`, `Continuous`, `Track`, `Stop`, `Steer`, and `Monitor Beam`

@@ -140,7 +140,7 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
                  elevation_min_deg: float = -60.0, elevation_max_deg: float = 60.0,
                  sector_time_s: float = 0.0028, flight_profile: str = "crossing",
                  flight_speed: float = 1.0, clock=time.monotonic,
-                 level_provider=None, fault_injector=None) -> None:
+                 level_provider=None) -> None:
         HeimdallTransport.__init__(self, clock=clock)
         threading.Thread.__init__(self, daemon=True)
         if not 1 <= rows <= 20 or not 1 <= columns <= 20:
@@ -161,8 +161,7 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
         self.flight_profile = flight_profile
         self.flight_speed = flight_speed
         self.level_provider = level_provider
-        self.fault_injector = fault_injector
-        self.commands: queue.Queue[str] = queue.Queue(maxsize=4)
+        self.commands: queue.Queue[str] = queue.Queue()
         self.mode = "IDLE"
         self.transport_name = "acoustic-emulator" if level_provider is not None else "emulator"
         self.random = random.Random(78002)
@@ -177,7 +176,6 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
         self.failed_track_passes = 0
         self.tracking_passes = 0
         self.confirm_passes = 0
-        self.last_sector_elapsed_us = 0
 
     def snapshot(self) -> dict[str, Any]:
         snapshot = super().snapshot()
@@ -199,13 +197,9 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
                 try:
                     command = self.commands.get(timeout=0.01 if self.mode == "IDLE" else 0.0)
                     self._handle_command(command)
-                    self._drain_commands()
                 except queue.Empty:
-                    if self.mode in {"F", "C"}:
-                        active_mode = self.mode
-                        self._scan_pass(active_mode)
-                        if active_mode == "F" and self.mode == "F":
-                            self.mode = "IDLE"
+                    if self.mode == "C":
+                        self._scan_pass("C")
                     elif self.mode == "G":
                         self._adaptive_cycle()
         finally:
@@ -213,18 +207,16 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
             self.running = False
 
     def send_command(self, command: str) -> None:
-        try:
-            self.commands.put_nowait(validate_command(command, self.rows * self.columns))
-        except queue.Full:
-            self.apply_line("ERR,COMMAND_QUEUE_FULL")
+        self.commands.put(validate_command(command, self.rows * self.columns))
 
-    def _handle_command(self, command: str) -> bool:
+    def _handle_command(self, command: str) -> None:
         if command == "I":
             self._emit_configuration()
-            return False
         elif command == "F":
             self.mode = "F"
             self.apply_line("SCAN_STARTED,F")
+            self._scan_pass("F")
+            self.mode = "IDLE"
         elif command == "C":
             self.mode = "C"
             self.apply_line("SCAN_STARTED,C")
@@ -237,25 +229,17 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
             self.adaptive_state = "IDLE"
             self.apply_line("SCAN_STOPPED")
         elif command == "M":
-            if self.current_sector is None or self.mode != "IDLE":
-                self.apply_line("ERR,INVALID_COMMAND")
-                return False
+            if self.current_sector is None:
+                self.apply_line("ERR,NO_ACTIVE_BEAM")
             else:
-                self._emit_level_read(self.current_sector)
+                self._emit_measurement(self.current_sector, delay=False)
         elif command.startswith("S,"):
             self.mode = "IDLE"
             self.adaptive_state = "IDLE"
             sector = int(command[2:])
-            if self._abort_for_fault("steer", sector):
-                return True
             self.current_sector = sector
-            started = time.monotonic()
-            if self.sector_time_s > 0:
-                time.sleep(self.sector_time_s)
-            elapsed_us = max(1, int((time.monotonic() - started) * 1_000_000))
-            self._emit_steer_ok(sector, elapsed_us)
-            self._emit_level_read(sector)
-        return True
+            self._emit_steer_ok(sector)
+            self._emit_measurement(sector, delay=False)
 
     def _emit_configuration(self) -> None:
         sectors = self.rows * self.columns
@@ -266,21 +250,15 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
     def _scan_pass(self, mode: str) -> None:
         started = time.monotonic()
         measured = 0
-        sector_times = []
         for sector in range(self.rows * self.columns):
             if self._consume_interrupt():
                 return
-            level = self._emit_measurement(sector)
-            if level is None:
-                return
-            sector_times.append(self.last_sector_elapsed_us)
+            self._emit_measurement(sector)
             measured += 1
         elapsed_us = max(1, int((time.monotonic() - started) * 1_000_000))
+        sector_us = elapsed_us // max(1, measured)
         self.apply_line("SCAN_DONE")
-        self.apply_line(
-            f"TIMING,{mode},{measured},{sum(sector_times)},{elapsed_us},"
-            f"{min(sector_times)},{max(sector_times)}"
-        )
+        self.apply_line(f"TIMING,{mode},{measured},{elapsed_us},{elapsed_us},{sector_us},{sector_us}")
 
     def _adaptive_cycle(self) -> None:
         if self.adaptive_state == "SEARCH":
@@ -391,27 +369,18 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
     def _measure_sector_set(self, sectors) -> tuple[dict[int, int], int] | None:
         started = time.monotonic()
         measured: dict[int, int] = {}
-        sector_times = []
         for sector in sectors:
             if self._consume_interrupt():
                 return None
-            level = self._emit_measurement(sector)
-            if level is None:
-                return None
-            measured[sector] = level
-            sector_times.append(self.last_sector_elapsed_us)
-        self._last_pass_sector_times = sector_times
+            measured[sector] = self._emit_measurement(sector)
         elapsed_us = max(1, int((time.monotonic() - started) * 1_000_000))
         return measured, elapsed_us
 
     def _emit_pass_timing(self, mode: str, measured: dict[int, int], elapsed_us: int) -> None:
         count = len(measured)
-        sector_times = self._last_pass_sector_times
+        sector_us = elapsed_us // max(1, count)
         self.apply_line("SCAN_DONE")
-        self.apply_line(
-            f"TIMING,{mode},{count},{sum(sector_times)},{elapsed_us},"
-            f"{min(sector_times)},{max(sector_times)}"
-        )
+        self.apply_line(f"TIMING,{mode},{count},{elapsed_us},{elapsed_us},{sector_us},{sector_us}")
 
     @staticmethod
     def _strongest_measurement(measured: dict[int, int]) -> tuple[int, int]:
@@ -433,70 +402,32 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
     def _consume_interrupt(self) -> bool:
         if not self.running:
             return True
-        return self._drain_commands()
-
-    def _drain_commands(self) -> bool:
-        state_changed = False
         try:
-            while True:
-                state_changed = self._handle_command(self.commands.get_nowait()) or state_changed
+            command = self.commands.get_nowait()
         except queue.Empty:
-            return state_changed
+            return False
+        self._handle_command(command)
+        return command != "I"
 
-    def _emit_measurement(self, sector: int, delay: bool = True) -> int | None:
-        started = time.monotonic()
-        if self._abort_for_fault("steer", sector):
-            return None
+    def _emit_measurement(self, sector: int, delay: bool = True) -> int:
         self.current_sector = sector
-        if delay and self.sector_time_s > 0:
-            time.sleep(self.sector_time_s)
-        level = self._emit_level_read(sector)
-        if level is None:
-            return None
-        self.last_sector_elapsed_us = max(1, int((time.monotonic() - started) * 1_000_000))
-        return level
-
-    def _emit_level_read(self, sector: int) -> int | None:
-        if self._abort_for_fault("read", sector):
-            return None
         row, column = divmod(sector, self.columns)
-        try:
-            level = self._level_for_sector(sector)
-        except (OSError, ValueError):
-            self._abort_pass()
-            self.apply_line(f"ERR,LEVEL_READ,{sector},-1")
-            return None
+        level = self._level_for_sector(sector)
         self.apply_line(
             f"P,{row},{column},{_format_angle(self.azimuth_deg[column])},"
             f"{_format_angle(self.elevation_deg[row])},{level}"
         )
+        if delay and self.sector_time_s > 0:
+            time.sleep(self.sector_time_s)
         return level
 
-    def _abort_for_fault(self, operation: str, sector: int) -> bool:
-        if self.fault_injector is None:
-            return False
-        result = self.fault_injector(operation, sector)
-        if result is None or result == 0:
-            return False
-        code, failed_mic = result if isinstance(result, tuple) else (int(result), 0)
-        self._abort_pass()
-        if operation == "steer":
-            self.apply_line(f"STEER_ERR,{sector},{failed_mic},{code}")
-        else:
-            self.apply_line(f"ERR,LEVEL_READ,{sector},{code}")
-        return True
-
-    def _abort_pass(self) -> None:
-        self.mode = "IDLE"
-        self.adaptive_state = "IDLE"
-
-    def _emit_steer_ok(self, sector: int, elapsed_us: int) -> None:
+    def _emit_steer_ok(self, sector: int) -> None:
         row, column = divmod(sector, self.columns)
         self.apply_line(
             f"STEER_OK,{sector},{row},{column},{_format_angle(self.azimuth_deg[column])},"
             f"{_format_angle(self.elevation_deg[row])}"
         )
-        self.apply_line(f"TIMING,S,{elapsed_us}")
+        self.apply_line(f"TIMING,S,{int(self.sector_time_s * 1_000_000)}")
 
     def _target_state(self, elapsed: float | None = None) -> tuple[float, float, float, float]:
         elapsed = (self.clock() - self.started_at) if elapsed is None else elapsed
