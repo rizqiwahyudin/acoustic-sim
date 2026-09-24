@@ -1712,6 +1712,10 @@ let hwLastUiTick = 0;
 let hwAcousticCacheId = null;
 let hwAcousticPollTimer = null;
 let hwAuditionUrls = {};
+let hwDownloadRequested = false;
+let hwDownloadCommandSent = false;
+let hwDownloadStopSent = false;
+let hwRecordingUiKey = '';
 const HW_EVENT_LOG_MAX = 50;
 const HW_STALE_MS = 5000;
 
@@ -1770,10 +1774,102 @@ function syncHwControls() {
   }
   document.getElementById('btnHwDisconnect').disabled = !hwTransportOpen();
 
+  const transportName = String(hwLastFrame?.transport || hwInit?.transport || '');
+  const recordingState = hwLastFrame?.recording_state || hwInit?.recording_state || 'idle';
+  const recordingCapable = ready && transportName.startsWith('serial:');
+  document.getElementById('btnHwRecord').disabled = !recordingCapable || recordingState === 'downloading';
+  document.getElementById('btnHwDownload').disabled = !recordingCapable ||
+    !['ready', 'downloaded'].includes(recordingState);
+
   const activeMode = hwLastFrame?.firmware_mode;
   document.getElementById('btnHwOnce').classList.toggle('active', activeMode === 'F');
   document.getElementById('btnHwContinuous').classList.toggle('active', activeMode === 'C');
   document.getElementById('btnHwAdaptive').classList.toggle('active', activeMode === 'G');
+}
+
+function renderHwRecording(frame) {
+  const state = frame?.recording_state || 'idle';
+  const recording = frame?.last_recording;
+  const progressValue = Number(frame?.audio_download_progress || 0);
+  advanceHwDownload(frame);
+  const uiKey = [
+    state,
+    frame?.firmware_mode || 'IDLE',
+    recording?.samples || 0,
+    recording?.overruns || 0,
+    Math.floor(progressValue * 100),
+    frame?.audio_download_ready || false,
+    frame?.audio_download_error || '',
+  ].join('|');
+  if (uiKey === hwRecordingUiKey) return;
+  hwRecordingUiKey = uiKey;
+  const recordButton = document.getElementById('btnHwRecord');
+  const status = document.getElementById('hwRecordStatus');
+  const progress = document.getElementById('hwRecordProgress');
+  recordButton.textContent = state === 'recording' ? '■ Stop Recording' : '● Record';
+  recordButton.classList.toggle('active', state === 'recording');
+  progress.value = progressValue;
+
+  if (state === 'recording') {
+    status.textContent = 'Recording beamformed audio…';
+  } else if (state === 'ready' && recording) {
+    const seconds = Number(recording.samples || 0) / 48000;
+    status.textContent = `Ready · ${seconds.toFixed(2)} s · ${recording.overruns || 0} overruns`;
+  } else if (state === 'downloading') {
+    status.textContent = `Downloading · ${(progress.value * 100).toFixed(0)}%`;
+  } else if (state === 'downloaded') {
+    status.textContent = 'Download verified · WAV ready';
+  } else if (state === 'error') {
+    status.textContent = frame?.audio_download_error || 'Recording error';
+  } else {
+    status.textContent = 'No recording';
+  }
+  syncHwControls();
+
+  if (hwDownloadRequested && frame?.audio_download_ready) {
+    saveHardwareWav();
+  }
+}
+
+async function saveHardwareWav() {
+  hwDownloadRequested = false;
+  hwDownloadCommandSent = false;
+  hwDownloadStopSent = false;
+  try {
+    const response = await fetch('http://127.0.0.1:8766/hw_recording.wav');
+    if (!response.ok) throw new Error(await response.text());
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `heimdall-${new Date().toISOString().replace(/[:.]/g, '-')}.wav`;
+    link.click();
+    URL.revokeObjectURL(url);
+    addHwEvent('AUDIO', 'WAV saved');
+  } catch (error) {
+    document.getElementById('hwRecordStatus').textContent = `Save failed · ${error.message}`;
+    addHwEvent('ERROR', `Audio save failed: ${error.message}`, 'error');
+  }
+}
+
+function advanceHwDownload(frame) {
+  if (!hwDownloadRequested || hwDownloadCommandSent || frame?.audio_download_ready) return;
+  if (!['ready', 'downloaded'].includes(frame?.recording_state)) return;
+
+  if (frame?.firmware_mode !== 'IDLE') {
+    if (!hwDownloadStopSent && hwSend({type: 'command', command: 'X'})) {
+      hwDownloadStopSent = true;
+      document.getElementById('hwRecordStatus').textContent = 'Stopping scan before download…';
+      addHwEvent('AUDIO', 'Stopping scan before recording download', 'warning');
+    }
+    return;
+  }
+
+  if (hwSend({type: 'command', command: 'D'})) {
+    hwDownloadCommandSent = true;
+    document.getElementById('hwRecordStatus').textContent = 'Starting recording download…';
+    addHwEvent('AUDIO', 'Recording download started');
+  }
 }
 
 function addHwEvent(kind, detail, tone = '') {
@@ -2212,6 +2308,7 @@ function onHardwareMessage(msg) {
     if (changed) addHwEvent('CONFIG', `${cfg.rows} × ${cfg.columns} · ${cfg.sectors} sectors · ${cfg.microphones} microphones`);
     updateHwGridSource(msg);
     updateHwReadiness(msg);
+    renderHwRecording(msg);
     return;
   }
   if (msg.type === 'frame') {
@@ -2232,6 +2329,7 @@ function onHardwareMessage(msg) {
     renderHwMetrics(msg);
     renderHwSolution(msg);
     updateHwReadiness(msg);
+    renderHwRecording(msg);
     if (msg.levels_db && msg.configuration) {
       hwNeedsRedraw = true;
       if (telemetryAdvanced) hwSonarTargetAngle += Math.PI / Math.max(1, msg.configuration.sectors);
@@ -3764,6 +3862,29 @@ for (const [buttonId, command] of [
     }
   });
 }
+
+document.getElementById('btnHwRecord').addEventListener('click', () => {
+  const state = hwLastFrame?.recording_state || hwInit?.recording_state || 'idle';
+  const command = state === 'recording' ? 'R,0' : 'R,1';
+  if (hwSend({type: 'command', command})) {
+    addHwEvent('AUDIO', command === 'R,1' ? 'Recording requested' : 'Recording stop requested');
+  }
+});
+
+document.getElementById('btnHwDownload').addEventListener('click', () => {
+  if (hwLastFrame?.audio_download_ready) {
+    saveHardwareWav();
+    return;
+  }
+  hwDownloadRequested = true;
+  hwDownloadCommandSent = false;
+  hwDownloadStopSent = false;
+  if (!hwTransportOpen()) {
+    hwDownloadRequested = false;
+    return;
+  }
+  advanceHwDownload(hwLastFrame || hwInit);
+});
 
 document.getElementById('btnHwSteer').addEventListener('click', () => {
   stopHwMonitor();

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+import zlib
 
 import pytest
 
@@ -9,6 +10,7 @@ from heimdall_protocol import HeimdallState, ProtocolError, parse_line
 from heimdall_transport import (
     EmulatorHeimdallTransport,
     HeimdallTransport,
+    SerialHeimdallTransport,
     TRACK_FAILURE_LIMIT,
     validate_command,
 )
@@ -135,10 +137,94 @@ def test_command_validation():
     assert validate_command("S,399", sectors=400) == "S,399"
     assert validate_command("I") == "I"
     assert validate_command("M") == "M"
+    assert validate_command("R,1") == "R,1"
+    assert validate_command("R,0") == "R,0"
+    assert validate_command("D") == "D"
     with pytest.raises(ValueError):
         validate_command("S,400", sectors=400)
     with pytest.raises(ValueError):
         validate_command("s,1")
+
+
+def test_recording_and_audio_transfer_records():
+    state = HeimdallState()
+    state.apply_line("AUDIO_READY,48000,16,1")
+    state.apply_line("REC_STARTED,48000,16,1")
+    assert state.snapshot()["recording_state"] == "recording"
+
+    state.apply_line("REC_STOPPED,96000,192000,-123,456,47,0,987654321")
+    snapshot = state.snapshot()
+    assert snapshot["recording_state"] == "ready"
+    assert snapshot["last_recording"]["bytes"] == 192000
+    assert snapshot["last_recording"]["overruns"] == 0
+
+    state.apply_line("AUDIO_BEGIN,1,192000,48000,16,1,89ABCDEF")
+    assert state.snapshot()["recording_state"] == "downloading"
+    state.apply_line("AUDIO_END,89ABCDEF")
+    snapshot = state.snapshot()
+    assert snapshot["recording_state"] == "downloaded"
+    assert snapshot["audio_transfer"]["crc32"] == 0x89ABCDEF
+    assert snapshot["audio_transfer"]["end_crc32"] == 0x89ABCDEF
+
+
+def test_new_recording_invalidates_previous_audio_download():
+    transport = HeimdallTransport()
+    transport.latest_audio = {
+        "sample_rate_hz": 48000,
+        "bits_per_sample": 16,
+        "channels": 1,
+        "pcm": b"old",
+    }
+    transport.audio_download_expected = 3
+    transport.audio_download_received = 3
+
+    transport.apply_line("REC_STARTED,48000,16,1")
+
+    snapshot = transport.snapshot()
+    assert transport.get_audio_download() is None
+    assert not snapshot["audio_download_ready"]
+    assert snapshot["audio_download_expected"] == 0
+    assert snapshot["audio_download_received"] == 0
+
+
+def test_serial_audio_payload_uses_exact_length_not_newline_framing():
+    class FakeSerial:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+            return len(data)
+
+        def flush(self):
+            pass
+
+    transport = SerialHeimdallTransport.__new__(SerialHeimdallTransport)
+    HeimdallTransport.__init__(transport)
+    transport.rx_buffer = bytearray()
+    transport.audio_header = None
+    transport.audio_payload = bytearray()
+    transport.audio_acknowledged = 0
+    transport.write_lock = __import__("threading").Lock()
+    transport.serial = FakeSerial()
+
+    pcm = b"\x00\x01\n\r\xff\x7f\x00\x80"
+    crc = zlib.crc32(pcm) & 0xFFFFFFFF
+    packet = (
+        f"AUDIO_BEGIN,2,{len(pcm)},48000,16,1,4,{crc:08X}\r\n".encode("ascii")
+        + pcm
+        + f"\r\nAUDIO_END,{crc:08X}\r\n".encode("ascii")
+    )
+    for split in (packet[:5], packet[5:23], packet[23:31], packet[31:]):
+        transport._process_received_data(split)
+
+    captured = transport.get_audio_download()
+    assert captured is not None
+    assert captured["pcm"] == pcm
+    assert captured["sample_rate_hz"] == 48000
+    assert captured["bits_per_sample"] == 16
+    assert transport.snapshot()["audio_download_progress"] == 1.0
+    assert transport.serial.writes == [b"\x06", b"\x06"]
 
 
 def test_emulator_uses_the_same_protocol_state_path():

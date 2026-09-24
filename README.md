@@ -217,10 +217,15 @@ AZIMUTH,<count>,...
 ELEVATION,<count>,...
 ```
 
-The UI supports generated grids up to 20x20 and forwards `S/F/C/G/X/I/M` firmware
+The UI supports generated grids up to 20x20 and forwards `S/F/C/G/X/I/M/R/D` firmware
 commands over the existing `/realtime_hw` WebSocket.
 
-The acoustic emulator is intentionally tied to the deployed 7x7 machine-readable
+The Hardware view also provides Record/Stop and Save WAV controls for serial
+hardware. Firmware captures 48 kHz mono PCM16 through the onboard MAX9867,
+buffers up to 30 seconds in APS6404, and transfers finalized audio with exact
+byte framing and CRC32. The backend packages verified PCM as a downloadable WAV.
+
+The acoustic emulator is intentionally tied to the deployed 6x6 machine-readable
 contract under `data/heimdall_acoustic_contract.json`. It refuses to start if
 the contract's recorded C-header hash differs from the actual firmware
 `beam_table_2d.h`. Regenerate and copy both C and JSON artifacts after changing

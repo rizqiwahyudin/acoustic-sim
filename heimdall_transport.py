@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from typing import Any
+import zlib
 
 from heimdall_protocol import HeimdallState, ProtocolError
 
@@ -37,8 +38,12 @@ class HeimdallTransport:
         self.protocol_errors = 0
         self.clock = clock
         self.target_update_times: deque[float] = deque(maxlen=32)
+        self.audio_download_expected = 0
+        self.audio_download_received = 0
+        self.audio_download_error: str | None = None
+        self.latest_audio: dict[str, Any] | None = None
 
-    def apply_line(self, line: str) -> None:
+    def apply_line(self, line: str) -> dict[str, Any] | None:
         try:
             with self.lock:
                 record = self.state.apply_line(line)
@@ -50,8 +55,15 @@ class HeimdallTransport:
                     self.target_update_times.append(self.clock())
                 elif record_type == "target_updated":
                     self.target_update_times.append(self.clock())
+                elif record_type == "recording_started":
+                    self.latest_audio = None
+                    self.audio_download_expected = 0
+                    self.audio_download_received = 0
+                    self.audio_download_error = None
+                return record
         except ProtocolError:
             self.protocol_errors += 1
+            return None
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -67,8 +79,22 @@ class HeimdallTransport:
             "protocol_errors": self.protocol_errors,
             "target_update_rate_hz": update_rate_hz,
             "target_update_age_s": None if not update_times else max(0.0, now - update_times[-1]),
+            "audio_download_expected": self.audio_download_expected,
+            "audio_download_received": self.audio_download_received,
+            "audio_download_progress": (
+                0.0 if self.audio_download_expected == 0
+                else self.audio_download_received / self.audio_download_expected
+            ),
+            "audio_download_ready": self.latest_audio is not None,
+            "audio_download_error": self.audio_download_error,
         })
         return snapshot
+
+    def get_audio_download(self) -> dict[str, Any] | None:
+        with self.lock:
+            if self.latest_audio is None:
+                return None
+            return {**self.latest_audio, "pcm": bytes(self.latest_audio["pcm"])}
 
     def send_command(self, command: str) -> None:
         raise NotImplementedError
@@ -84,11 +110,18 @@ class SerialHeimdallTransport(HeimdallTransport, threading.Thread):
         import serial
 
         self.serial = serial.Serial(port, baud, timeout=0.05, write_timeout=0.5)
+        try:
+            self.serial.set_buffer_size(rx_size=4 * 1024 * 1024)
+        except (AttributeError, OSError):
+            pass
         self.port = port
         self.baud = baud
         self.transport_name = f"serial:{port}"
         self.write_lock = threading.Lock()
         self.rx_buffer = bytearray()
+        self.audio_header: dict[str, Any] | None = None
+        self.audio_payload = bytearray()
+        self.audio_acknowledged = 0
 
     def run(self) -> None:
         self.running = True
@@ -99,20 +132,7 @@ class SerialHeimdallTransport(HeimdallTransport, threading.Thread):
                 data = self.serial.read(max(1, self.serial.in_waiting))
                 if not data:
                     continue
-                self.rx_buffer.extend(data)
-                if len(self.rx_buffer) > 65536:
-                    self.rx_buffer.clear()
-                    self.protocol_errors += 1
-                    continue
-                while b"\n" in self.rx_buffer:
-                    raw_line, _, remainder = self.rx_buffer.partition(b"\n")
-                    self.rx_buffer = bytearray(remainder)
-                    try:
-                        line = raw_line.decode("ascii", errors="strict").rstrip("\r")
-                    except UnicodeError:
-                        self.protocol_errors += 1
-                        continue
-                    self.apply_line(line)
+                self._process_received_data(data)
         except OSError:
             self.protocol_errors += 1
         finally:
@@ -126,6 +146,106 @@ class SerialHeimdallTransport(HeimdallTransport, threading.Thread):
         with self.write_lock:
             self.serial.write((command + "\n").encode("ascii"))
             self.serial.flush()
+
+    def _process_received_data(self, data: bytes) -> None:
+        self.rx_buffer.extend(data)
+        while True:
+            if self.audio_header is not None and len(self.audio_payload) < self.audio_download_expected:
+                remaining = self.audio_download_expected - len(self.audio_payload)
+                take = min(remaining, len(self.rx_buffer))
+                if take == 0:
+                    return
+                self.audio_payload.extend(self.rx_buffer[:take])
+                del self.rx_buffer[:take]
+                with self.lock:
+                    self.audio_download_received = len(self.audio_payload)
+                self._acknowledge_audio_blocks()
+                if len(self.audio_payload) < self.audio_download_expected:
+                    return
+                continue
+
+            newline = self.rx_buffer.find(b"\n")
+            if newline < 0:
+                if len(self.rx_buffer) > 65536:
+                    self.rx_buffer.clear()
+                    self.protocol_errors += 1
+                return
+
+            raw_line = bytes(self.rx_buffer[:newline])
+            del self.rx_buffer[:newline + 1]
+            try:
+                line = raw_line.decode("ascii", errors="strict").rstrip("\r")
+            except UnicodeError:
+                self.protocol_errors += 1
+                continue
+
+            record = self.apply_line(line)
+            if record is None:
+                continue
+            if record["type"] == "audio_begin":
+                self.audio_header = record
+                self.audio_payload = bytearray()
+                self.audio_acknowledged = 0
+                with self.lock:
+                    self.latest_audio = None
+                    self.audio_download_expected = record["bytes"]
+                    self.audio_download_received = 0
+                    self.audio_download_error = None
+            elif record["type"] == "audio_end":
+                self._finish_audio_download(record)
+
+    def _acknowledge_audio_blocks(self) -> None:
+        if self.audio_header is None:
+            return
+        interval = int(self.audio_header.get("ack_interval", 0))
+        if interval <= 0:
+            return
+        received = len(self.audio_payload)
+        target = min(
+            self.audio_download_expected,
+            ((received // interval) * interval),
+        )
+        if received == self.audio_download_expected:
+            target = received
+        while self.audio_acknowledged < target:
+            with self.write_lock:
+                self.serial.write(b"\x06")
+                self.serial.flush()
+            self.audio_acknowledged = min(
+                self.audio_acknowledged + interval,
+                self.audio_download_expected,
+            )
+
+    def _finish_audio_download(self, footer: dict[str, Any]) -> None:
+        header = self.audio_header
+        payload = bytes(self.audio_payload)
+        error = None
+        if header is None:
+            error = "audio footer received without a header"
+        elif len(payload) != header["bytes"]:
+            error = "audio payload length does not match header"
+        else:
+            actual_crc = zlib.crc32(payload) & 0xFFFFFFFF
+            if footer["crc32"] != actual_crc:
+                error = (
+                    f"audio CRC32 mismatch: expected {footer['crc32']:08X}, "
+                    f"received {actual_crc:08X}"
+                )
+            elif header["crc32"] not in {0, actual_crc}:
+                error = "audio header CRC32 does not match payload"
+
+        with self.lock:
+            if error is None:
+                self.latest_audio = {**header, "pcm": payload}
+                self.audio_download_received = len(payload)
+            else:
+                self.audio_download_error = error
+                self.state.recording_state = "error"
+                self.protocol_errors += 1
+            self.state.sequence += 1
+        self.audio_header = None
+        self.audio_payload = bytearray()
+        self.audio_acknowledged = 0
 
     def stop(self) -> None:
         self.running = False
@@ -517,7 +637,7 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
 
 def validate_command(command: str, sectors: int = 65535) -> str:
     command = command.strip()
-    if command in {"F", "C", "G", "X", "I", "M"}:
+    if command in {"F", "C", "G", "X", "I", "M", "R,1", "R,0", "D"}:
         return command
     match = re.fullmatch(r"S,(\d+)", command)
     if match and int(match.group(1)) < sectors:

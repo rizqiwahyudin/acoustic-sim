@@ -108,12 +108,12 @@ class BeamContract:
 
 @dataclass(frozen=True)
 class AcousticGridSpec:
-    rows: int = 7
-    columns: int = 7
-    azimuth_min_deg: float = -70.0
-    azimuth_max_deg: float = 70.0
-    elevation_min_deg: float = -60.0
-    elevation_max_deg: float = 60.0
+    rows: int = 6
+    columns: int = 6
+    azimuth_min_deg: float = -40.0
+    azimuth_max_deg: float = 40.0
+    elevation_min_deg: float = -40.0
+    elevation_max_deg: float = 40.0
 
     def validate(self) -> None:
         if not 1 <= self.rows <= 20 or not 1 <= self.columns <= 20:

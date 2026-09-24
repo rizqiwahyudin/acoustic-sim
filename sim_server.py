@@ -14,11 +14,12 @@ import io
 import json
 import pathlib
 import time
+import wave
 
 import numpy as np
 import pyroomacoustics as pra
 import scipy.io.wavfile as wavfile
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -1530,6 +1531,31 @@ def hw_status():
     }
 
 
+@app.get("/hw_recording.wav")
+def hw_recording_wav():
+    with _heimdall_transport_lock:
+        transport = _heimdall_transport
+    if transport is None:
+        raise HTTPException(status_code=404, detail="no hardware transport is active")
+    capture = transport.get_audio_download()
+    if capture is None:
+        raise HTTPException(status_code=404, detail="no completed audio download is available")
+    if capture["bits_per_sample"] != 16 or capture["channels"] != 1:
+        raise HTTPException(status_code=422, detail="unsupported captured PCM format")
+
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(capture["channels"])
+        wav.setsampwidth(capture["bits_per_sample"] // 8)
+        wav.setframerate(capture["sample_rate_hz"])
+        wav.writeframes(capture["pcm"])
+    return Response(
+        content=output.getvalue(),
+        media_type="audio/wav",
+        headers={"Content-Disposition": "attachment; filename=heimdall-recording.wav"},
+    )
+
+
 @app.websocket("/realtime_hw")
 async def realtime_hw_ws(ws: WebSocket):
     """Stream parsed Heimdall state and forward commands to the active transport."""
@@ -1555,7 +1581,12 @@ async def realtime_hw_ws(ws: WebSocket):
             snapshot = transport.snapshot()
             truth_frame = snapshot.get("emulator_truth", {}).get("frame")
             truth_tick = truth_frame // 10 if isinstance(truth_frame, int) else None
-            state_key = (snapshot["sequence"], truth_tick)
+            expected_audio = snapshot["audio_download_expected"]
+            audio_progress_percent = (
+                0 if expected_audio == 0
+                else snapshot["audio_download_received"] * 100 // expected_audio
+            )
+            state_key = (snapshot["sequence"], truth_tick, audio_progress_percent)
             if state_key == last_state_key:
                 await asyncio.sleep(0.010)
                 continue
@@ -1661,6 +1692,14 @@ def _hardware_payload(payload_type, snapshot):
         "last_timing": timing,
         "last_error": snapshot["last_error"],
         "last_record": last_record,
+        "audio_format": snapshot["audio_format"],
+        "recording_state": snapshot["recording_state"],
+        "last_recording": snapshot["last_recording"],
+        "audio_download_expected": snapshot["audio_download_expected"],
+        "audio_download_received": snapshot["audio_download_received"],
+        "audio_download_progress": snapshot["audio_download_progress"],
+        "audio_download_ready": snapshot["audio_download_ready"],
+        "audio_download_error": snapshot["audio_download_error"],
         "protocol_errors": snapshot["protocol_errors"],
         "est_az_deg": estimated_azimuth,
         "est_el_deg": estimated_elevation,

@@ -445,6 +445,16 @@
       </div>
     </div>
 
+    <div class="hw-control-section">
+      <div class="hw-section-label">RECORD</div>
+      <div class="hw-command-grid">
+        <button type="button" id="btnHwRecord" class="mat-preset-btn hw-operational" title="Start or stop beamformed audio recording" disabled>● Record</button>
+        <button type="button" id="btnHwDownload" class="mat-preset-btn hw-operational" title="Download the completed recording as WAV" disabled>↓ Save WAV</button>
+      </div>
+      <div id="hwRecordStatus" class="rt-status" role="status">No recording</div>
+      <progress id="hwRecordProgress" class="hw-record-progress" max="1" value="0"></progress>
+    </div>
+
     <label class="hw-advanced-toggle" for="hwAdvancedToggle">
       <input type="checkbox" id="hwAdvancedToggle">
       <span>Advanced controls</span>

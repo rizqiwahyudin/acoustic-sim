@@ -42,12 +42,11 @@ def test_deployment_contract_dimensions_delays_and_fir():
     contract = load_beam_contract()
     assert contract.sampling_rate_hz == 48000
     assert contract.max_delay_samples == 68
-    assert (contract.rows, contract.columns, contract.sectors, contract.microphones) == (7, 7, 49, 44)
-    assert contract.delay_fixpt.shape == (49, 44)
-    assert contract.delay_samples.shape == (49, 44)
+    assert (contract.rows, contract.columns, contract.sectors, contract.microphones) == (6, 6, 36, 44)
+    assert contract.delay_fixpt.shape == (36, 44)
+    assert contract.delay_samples.shape == (36, 44)
     assert np.all(contract.delay_samples >= 0.0)
     assert np.max(contract.delay_samples) <= 68.0
-    np.testing.assert_array_equal(contract.delay_fixpt[24], np.zeros(44, dtype=np.uint32))
     assert len(contract.fir_stages) == 2
     assert all(stage.size == 11 for stage in contract.fir_stages)
 
@@ -81,7 +80,7 @@ def test_custom_acoustic_grid_generates_quantized_delays_without_mutating_deploy
     assert (grid.rows, grid.columns, grid.sectors) == (20, 20, 400)
     assert grid.delay_fixpt.shape == (400, 44)
     assert np.max(grid.delay_samples) <= deployment.max_delay_samples
-    assert deployment.delay_fixpt.shape == (49, 44)
+    assert deployment.delay_fixpt.shape == (deployment.sectors, 44)
 
 
 def test_vertical_array_room_transform_and_broadside_geometry():
@@ -171,20 +170,20 @@ def test_audio_loader_resamples_and_normalizes():
     assert np.sqrt(np.mean(np.square(samples))) == pytest.approx(1.0, rel=1e-3)
 
 
-@pytest.mark.parametrize("sector", [0, 24, 48])
-def test_exact_deployed_delays_peak_at_matching_plane_wave(sector):
+def test_exact_deployed_delays_peak_at_matching_plane_wave():
     contract = load_beam_contract()
-    row, column = divmod(sector, contract.columns)
-    azimuth = math.radians(contract.azimuth_deg[column])
-    elevation = math.radians(contract.elevation_deg[row])
-    direction = np.asarray((
-        math.cos(elevation) * math.sin(azimuth),
-        math.sin(elevation),
-        math.cos(elevation) * math.cos(azimuth),
-    ))
-    response = _plane_wave_transfer_powers(contract, direction[None, :], 512)
-    frequency_bin = int(round(4000.0 / (48000.0 / 512.0)))
-    assert int(np.argmax(response[:, frequency_bin])) == sector
+    for sector in (0, contract.sectors // 2, contract.sectors - 1):
+        row, column = divmod(sector, contract.columns)
+        azimuth = math.radians(contract.azimuth_deg[column])
+        elevation = math.radians(contract.elevation_deg[row])
+        direction = np.asarray((
+            math.cos(elevation) * math.sin(azimuth),
+            math.sin(elevation),
+            math.cos(elevation) * math.cos(azimuth),
+        ))
+        response = _plane_wave_transfer_powers(contract, direction[None, :], 512)
+        frequency_bin = int(round(4000.0 / (48000.0 / 512.0)))
+        assert int(np.argmax(response[:, frequency_bin])) == sector
 
 
 def test_detector_envelope_obeys_rise_and_decay_limits():
@@ -290,7 +289,7 @@ def test_moving_drone_cache_can_disable_speech(tmp_path):
         speech_enabled=False,
     )
     cache = prepare_acoustic_cache(scenario, cache_root=tmp_path)
-    assert cache.levels_raw.shape == (10, 49)
+    assert cache.levels_raw.shape == (10, load_beam_contract().sectors)
     assert "1000-4000 Hz" in cache.manifest["detector_filter"]
     assert "not applied" in cache.manifest["exported_fir_status"]
 

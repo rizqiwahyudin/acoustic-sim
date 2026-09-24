@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import time
+import wave
 
 from fastapi.testclient import TestClient
 import numpy as np
@@ -40,6 +42,29 @@ def test_transport_replacement_closes_after_stop_command_failure():
     sim_server._replace_heimdall_transport(None)
 
     assert previous.actions == [("command", "X"), ("stop", None)]
+
+
+def test_hardware_recording_wav_endpoint_packages_pcm():
+    class AudioTransport(RecordingTransport):
+        def get_audio_download(self):
+            return {
+                "sample_rate_hz": 48000,
+                "bits_per_sample": 16,
+                "channels": 1,
+                "pcm": b"\x01\x00\xff\xff\x02\x00\xfe\xff",
+            }
+
+    transport = AudioTransport()
+    sim_server._heimdall_transport = transport
+    with TestClient(sim_server.app) as client:
+        response = client.get("/hw_recording.wav")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/wav"
+        with wave.open(io.BytesIO(response.content), "rb") as wav:
+            assert wav.getframerate() == 48000
+            assert wav.getnchannels() == 1
+            assert wav.getsampwidth() == 2
+            assert wav.getnframes() == 4
 
 
 def test_emulator_connect_command_stream_and_disconnect():
@@ -102,7 +127,7 @@ def test_emulator_connect_command_stream_and_disconnect():
 
 def test_acoustic_prepare_connect_and_stream(monkeypatch, tmp_path):
     levels_path = tmp_path / "levels_raw.npy"
-    np.save(levels_path, np.full((4, 49), 1000, dtype=np.uint32))
+    np.save(levels_path, np.full((4, 36), 1000, dtype=np.uint32))
     manifest = {
         "schema": ACOUSTIC_MODEL_VERSION,
         "cache_id": "acoustic-test",

@@ -134,6 +134,62 @@ def parse_line(line: str) -> dict[str, Any]:
             "raw_level": _integer(parts[6], "raw level"),
         }
 
+    if record_type == "AUDIO_READY" and len(parts) == 4:
+        return {
+            "type": "audio_ready",
+            "sample_rate_hz": _integer(parts[1], "sample rate", 1),
+            "bits_per_sample": _integer(parts[2], "bits per sample", 1, 32),
+            "channels": _integer(parts[3], "channels", 1, 2),
+        }
+
+    if record_type == "REC_STARTED" and len(parts) == 4:
+        return {
+            "type": "recording_started",
+            "sample_rate_hz": _integer(parts[1], "sample rate", 1),
+            "bits_per_sample": _integer(parts[2], "bits per sample", 1, 32),
+            "channels": _integer(parts[3], "channels", 1, 2),
+        }
+
+    if record_type == "REC_STOPPED" and len(parts) == 8:
+        return {
+            "type": "recording_stopped",
+            "samples": _integer(parts[1], "samples"),
+            "bytes": _integer(parts[2], "bytes"),
+            "minimum": _signed_integer(parts[3], "minimum"),
+            "maximum": _signed_integer(parts[4], "maximum"),
+            "dma_completions": _integer(parts[5], "DMA completions"),
+            "overruns": _integer(parts[6], "overruns"),
+            "sum_squares": _integer(parts[7], "sum of squares", 0, 0xFFFFFFFFFFFFFFFF),
+        }
+
+    if record_type == "REC_ERROR" and len(parts) == 3:
+        return {
+            "type": "recording_error",
+            "stage": parts[1],
+            "code": _signed_integer(parts[2], "error code"),
+        }
+
+    if record_type == "AUDIO_BEGIN" and len(parts) in {7, 8}:
+        crc32 = parts[-1]
+        if len(crc32) != 8 or any(character not in "0123456789abcdefABCDEF" for character in crc32):
+            raise ProtocolError("audio CRC32 must contain eight hexadecimal digits")
+        return {
+            "type": "audio_begin",
+            "version": _integer(parts[1], "audio version", 1, 255),
+            "bytes": _integer(parts[2], "audio bytes", 1),
+            "sample_rate_hz": _integer(parts[3], "sample rate", 1),
+            "bits_per_sample": _integer(parts[4], "bits per sample", 1, 32),
+            "channels": _integer(parts[5], "channels", 1, 2),
+            "ack_interval": 0 if len(parts) == 7 else _integer(parts[6], "ACK interval", 1),
+            "crc32": int(crc32, 16),
+        }
+
+    if record_type == "AUDIO_END" and len(parts) == 2:
+        crc32 = parts[1]
+        if len(crc32) != 8 or any(character not in "0123456789abcdefABCDEF" for character in crc32):
+            raise ProtocolError("audio CRC32 must contain eight hexadecimal digits")
+        return {"type": "audio_end", "crc32": int(crc32, 16)}
+
     if record_type == "ERR" and len(parts) >= 2:
         return {"type": "error", "reason": parts[1], "details": parts[2:]}
 
@@ -180,6 +236,10 @@ class HeimdallState:
         self.last_timing: dict[str, Any] | None = None
         self.last_error: dict[str, Any] | None = None
         self.last_record: dict[str, Any] | None = None
+        self.audio_format: dict[str, int] | None = None
+        self.recording_state = "idle"
+        self.last_recording: dict[str, Any] | None = None
+        self.audio_transfer: dict[str, Any] | None = None
 
     def apply_line(self, line: str) -> dict[str, Any]:
         record = parse_line(line)
@@ -238,6 +298,30 @@ class HeimdallState:
             self.target = None if record_type == "target_lost" else record
         elif record_type in {"error", "steer_error"}:
             self.last_error = record
+        elif record_type == "audio_ready":
+            self.audio_format = {
+                "sample_rate_hz": record["sample_rate_hz"],
+                "bits_per_sample": record["bits_per_sample"],
+                "channels": record["channels"],
+            }
+        elif record_type == "recording_started":
+            self.recording_state = "recording"
+            self.last_recording = record
+            self.audio_transfer = None
+        elif record_type == "recording_stopped":
+            self.recording_state = "ready"
+            self.last_recording = record
+        elif record_type == "recording_error":
+            self.recording_state = "error"
+            self.last_recording = record
+            self.last_error = record
+        elif record_type == "audio_begin":
+            self.recording_state = "downloading"
+            self.audio_transfer = record
+        elif record_type == "audio_end":
+            self.recording_state = "downloaded"
+            if self.audio_transfer is not None:
+                self.audio_transfer = {**self.audio_transfer, "end_crc32": record["crc32"]}
 
         self.sequence += 1
         self.last_record = record
@@ -273,6 +357,10 @@ class HeimdallState:
             "last_timing": deepcopy(self.last_timing),
             "last_error": deepcopy(self.last_error),
             "last_record": deepcopy(self.last_record),
+            "audio_format": deepcopy(self.audio_format),
+            "recording_state": self.recording_state,
+            "last_recording": deepcopy(self.last_recording),
+            "audio_transfer": deepcopy(self.audio_transfer),
         }
 
     def _require_configuration(self) -> None:
