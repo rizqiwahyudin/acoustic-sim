@@ -1,12 +1,14 @@
 /**
- * HEIMDALL teaser: a wireframe world driven by time alone.
+ * HEIMDALL teaser, one continuous world driven by time alone.
  *
- * silence line -> drone spectrum terrain -> 44 points rise into the array ->
- * a wavefront crosses the microphones in delay order -> their wires converge
- * into one beam -> sector dome -> the drone and its spectral fingerprint.
+ * A valley whose ridges are the drone's real spectrum. A watchman and the
+ * array on its mast. Sparks rise into the 44 microphones; a wavefront falls
+ * from the sky and crosses them in delay order; an A.T.-field-like hex ripple;
+ * the wires converge into one beam; a sector of the sky locks; the camera
+ * climbs the beam to the drone, whose spectrum unrolls behind it as a second
+ * valley: the landscape was its sound all along.
  *
- * The array faces +z. Microphone positions, the 6x6 sector grid and the drone
- * spectrum are the repository's real data.
+ * The array's own frame faces +z; it stands at ARRAY_POS tilted up by TILT.
  */
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -16,35 +18,47 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { W, H, clamp, lerp, range01, smooth, easeInOut, easeOut, window01, hash, WIRE, SIGNAL } from './util.js';
+import {
+  W, H, clamp, lerp, range01, smooth, easeInOut, easeOut, window01, hash, WIRE, VIOLET, MAGENTA, SIGNAL,
+} from './util.js';
 
+export const DURATION = 30;
 export const T = {
-  lineIn: 0.3, textA: 1.1, spread: 2.9, terrain: 3.0,
-  rise: 7.1, frameDraw: 8.4, textB: 9.7,
-  wave: 10.8, converge: 12.1, dome: 12.8, lock: 13.45, beam: 13.0,
-  drone: 14.2, print: 14.9, title: 16.8, titleFull: 17.6, end: 20.0,
+  epigraph: 0.5, epigraphOut: 4.4,
+  fadeIn: 4.6, subtitle: 6.2, subtitleOut: 9.2,
+  frameDraw: 8.8, ignite: 9.0,
+  listen: 10.6, listenOut: 12.6,
+  wave: 12.6, cross: 15.0,
+  beam: 15.7, dome: 15.6, lock: 16.5,
+  capture: 16.6, captureOut: 18.4,
+  ascend: 17.4, drone: 19.2, print: 20.0, label: 20.8,
+  fadeOut: 23.0, black: 23.8,
+  title: 24.2, end: DURATION,
 };
-
-const BASE_Y = -0.95;
-const ROWS = 60;
-const COLS = 200;
-const Z_NEAR = 2.2;
-const DZ = 0.085;
-const X_HALF = 2.6;
-const AMP = 0.5;
-const PLATE_R = 0.297;
-const DOME_R = 2.5;
-const DRONE_DIST = 4.2;
 export const SOURCE = { az: 30, el: 20 };
+export const ARRAY_POS = new THREE.Vector3(0, 2.3, -12);
+const TILT = (20 * Math.PI) / 180;
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+const PLATE_R = 0.297;
+const DOME_R = 8;
+const DRONE_DIST = 16;
+const WAVE_START = 2.4;
+const WAVE_SPEED = 1.0;
+const LAND = { rows: 72, cols: 300, zNear: 5, dz: 0.68, xHalf: 15, amp: 3.0 };
+const FIGURE_POS = new THREE.Vector3(-1.25, 0, -11.6);
+// The drone's spectral wake: slices of its live spectrum leave the drone and drift back along the beam.
+const WAKE = { dt: 0.075, life: 2.6, speed: 0.9, start: -0.25, half: 1.1, base: -0.45, amp: 0.34, points: 120 };
 
 const scale = (c, k) => [c[0] * k, c[1] * k, c[2] * k];
 const mix = (a, b, k) => [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)];
 
-/** Unit vector for an azimuth/elevation seen from the array (array right = world -x). */
+/** Direction in the array's own frame (faces +z; array right = -x). */
 export function direction(azDeg, elDeg) {
   const az = (azDeg * Math.PI) / 180; const el = (elDeg * Math.PI) / 180;
   return new THREE.Vector3(-Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az));
 }
+export const toWorldDir = (v) => v.clone().applyAxisAngle(X_AXIS, -TILT);
+export const toWorld = (v) => toWorldDir(v).add(ARRAY_POS);
 
 /** Fat additive line segments rebuilt every frame. Brightness lives in the colour. */
 class Wires {
@@ -100,23 +114,35 @@ class Wires {
   }
 }
 
-function glowTexture() {
+function canvasTexture(width, height, draw) {
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.18, 'rgba(255,255,255,0.55)');
-  g.addColorStop(0.5, 'rgba(255,255,255,0.08)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(canvas);
+  canvas.width = width; canvas.height = height;
+  draw(canvas.getContext('2d'));
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
-function hexPoints(radius, z, rotation = 0) {
+const glowTexture = () => canvasTexture(128, 128, (ctx) => {
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.18, 'rgba(255,255,255,0.5)');
+  g.addColorStop(0.5, 'rgba(255,255,255,0.07)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
+});
+
+function hexPoints(radius, rotation = 0) {
   return Array.from({ length: 6 }, (_, i) => {
     const a = rotation + (i * Math.PI) / 3;
-    return new THREE.Vector3(radius * Math.cos(a), radius * Math.sin(a), z);
+    return new THREE.Vector3(radius * Math.cos(a), radius * Math.sin(a), 0);
   });
 }
+
+// A hooded watchman, 1.78 m, as a flat silhouette.
+const FIGURE = [
+  [-0.07, 1.78], [0.07, 1.78], [0.11, 1.7], [0.11, 1.6], [0.08, 1.53], [0.22, 1.46], [0.26, 1.3], [0.27, 1.0],
+  [0.25, 0.8], [0.12, 0.78], [0.1, 0.0], [0.03, 0.0], [0.02, 0.72], [-0.02, 0.72], [-0.03, 0.0], [-0.1, 0.0],
+  [-0.12, 0.78], [-0.25, 0.8], [-0.27, 1.0], [-0.26, 1.3], [-0.22, 1.46], [-0.08, 1.53], [-0.11, 1.6], [-0.11, 1.7],
+];
 
 export class Teaser {
   constructor(canvas, array, spectra) {
@@ -130,25 +156,32 @@ export class Teaser {
     renderer.toneMappingExposure = 1.0;
     this.renderer = renderer;
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x000000);
-    this.camera = new THREE.PerspectiveCamera(32, W / H, 0.01, 100);
+    this.scene.background = canvasTexture(4, 512, (ctx) => {
+      const g = ctx.createLinearGradient(0, 0, 0, 512);
+      g.addColorStop(0, '#020308'); g.addColorStop(0.42, '#07111a');
+      g.addColorStop(0.55, '#0d1a26'); g.addColorStop(0.7, '#060a12'); g.addColorStop(1, '#020306');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, 4, 512);
+    });
+    this.camera = new THREE.PerspectiveCamera(32, W / H, 0.02, 200);
     this.glow = glowTexture();
 
-    this.mics = array.microphones_mm.map(([x, y]) => new THREE.Vector3(-x / 1000, y / 1000, 0));
-    this.u = direction(SOURCE.az, SOURCE.el);
-    this.D = this.u.clone().multiplyScalar(DRONE_DIST);
-    this.F = this.u.clone().multiplyScalar(0.8);
-    this.byRadius = this.mics.map((_, i) => i).sort((a, b) => this.mics[a].length() - this.mics[b].length());
-    this.riseOrder = this.byRadius.map((_, k) => k);
+    this.micsLocal = array.microphones_mm.map(([x, y]) => new THREE.Vector3(-x / 1000, y / 1000, 0));
+    this.mics = this.micsLocal.map((p) => toWorld(p));
+    this.uLocal = direction(SOURCE.az, SOURCE.el);
+    this.u = toWorldDir(this.uLocal);
+    this.forward = toWorldDir(new THREE.Vector3(0, 0, 1));
+    this.D = ARRAY_POS.clone().add(this.u.clone().multiplyScalar(DRONE_DIST));
+    this.F = ARRAY_POS.clone().add(this.u.clone().multiplyScalar(0.9));
+    const byRadius = this.micsLocal.map((_, i) => i).sort((a, b) => this.micsLocal[a].length() - this.micsLocal[b].length());
     this.riseStart = []; this.arrive = [];
-    this.byRadius.forEach((mic, k) => {
-      this.riseStart[mic] = T.rise + (k / 43) * 0.9 + 0.15 * hash(mic, 11);
-      this.arrive[mic] = this.riseStart[mic] + 1.3;
+    byRadius.forEach((mic, k) => {
+      this.riseStart[mic] = T.ignite + (k / 43) * 1.0 + 0.2 * hash(mic, 11);
+      this.arrive[mic] = this.riseStart[mic] + 1.4;
     });
-    this.waveTime = this.mics.map((p) => T.wave + (1.35 - p.dot(this.u)) / 1.1);
+    this.waveTime = this.micsLocal.map((p) => T.wave + (WAVE_START - p.dot(this.uLocal)) / WAVE_SPEED);
 
-    this.buildStars();
-    this.buildTerrain();
+    this.buildAtmosphere();
+    this.buildLand();
     this.buildArray();
     this.buildDynamics();
     this.buildDome();
@@ -157,7 +190,7 @@ export class Teaser {
     const target = new THREE.WebGLRenderTarget(W, H, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.85, 0.6, 0.3));
+    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.8, 0.65, 0.32));
     this.composer.addPass(new OutputPass());
   }
 
@@ -171,80 +204,97 @@ export class Teaser {
     return Math.pow(v / 255, 2.2);
   }
 
-  heightAt(x, frame) {
-    const band = 1.5 + (Math.abs(x) / X_HALF) * 56;
-    const envelope = 0.12 + 0.88 * Math.exp(-((x / 1.7) ** 2));
-    return AMP * envelope * this.mag(frame, band);
+  landHeight(x, row, t) {
+    const ax = Math.abs(x);
+    const valley = smooth(range01(ax, 0.9, 3.2));
+    const envelope = 0.25 + 0.75 * Math.exp(-((x / 8) ** 2));
+    return LAND.amp * valley * envelope * this.mag(row * 3 + t * 6, 1.5 + (ax / LAND.xHalf) * 56);
   }
 
-  /** Rows scrolled toward the camera: integral of a smooth-start speed. */
-  scroll(t) {
-    const rate = 14; const t0 = T.terrain; const ramp = 1.6;
-    if (t < t0) return 0;
-    const x = Math.min(1, (t - t0) / ramp);
-    const eased = ramp * (x ** 3 - (x ** 4) / 2);
-    return rate * (eased + Math.max(0, t - t0 - ramp));
+  fog(point, near = 3, depth = 22) {
+    return Math.exp(-Math.max(0, point.distanceTo(this.camera.position) - near) / depth);
   }
 
   // ── Construction ─────────────────────────────────────────────────────────
-  buildStars() {
+  buildAtmosphere() {
+    this.halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    this.halo.position.set(0, 4.5, -34);
+    this.halo.scale.setScalar(30);
+    this.scene.add(this.halo);
+    this.rain = new Wires(this.scene, 1.0, 1);
     const positions = [];
-    for (let i = 0; i < 900; i++) {
-      const theta = hash(i, 1) * Math.PI * 2; const phi = Math.acos(2 * hash(i, 2) - 1);
-      const r = 7 + 9 * hash(i, 3);
-      positions.push(r * Math.sin(phi) * Math.cos(theta), r * Math.cos(phi) * 0.7, r * Math.sin(phi) * Math.sin(theta));
+    for (let i = 0; i < 1400; i++) {
+      const theta = hash(i, 1) * Math.PI * 2; const phi = Math.acos(2 * hash(i, 2) - 1); const r = 40 + 30 * hash(i, 3);
+      positions.push(r * Math.sin(phi) * Math.cos(theta), Math.abs(r * Math.cos(phi)) * 0.8 + 6, r * Math.sin(phi) * Math.sin(theta) - 12);
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     this.stars = new THREE.Points(geometry, new THREE.PointsMaterial({
-      color: new THREE.Color(0.55, 0.62, 0.75), size: 1.6, sizeAttenuation: false,
-      transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false,
+      color: new THREE.Color(0.5, 0.6, 0.75), size: 1.4, sizeAttenuation: false,
+      transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false,
     }));
     this.scene.add(this.stars);
   }
 
-  buildTerrain() {
-    const vertices = ROWS * (COLS + 1) * 2;
+  buildLand() {
+    const { rows, cols } = LAND;
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(vertices * 3), 3));
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(rows * (cols + 1) * 2 * 3), 3));
     const index = [];
-    for (let r = 0; r < ROWS; r++) {
-      const base = r * (COLS + 1) * 2;
-      for (let c = 0; c < COLS; c++) {
-        const a = base + c * 2; const b = a + 1; const d = a + 2; const e = a + 3;
-        index.push(a, b, d, d, b, e);
+    for (let r = 0; r < rows; r++) {
+      const base = r * (cols + 1) * 2;
+      for (let c = 0; c < cols; c++) {
+        const a = base + c * 2;
+        index.push(a, a + 1, a + 2, a + 2, a + 1, a + 3);
       }
     }
     geometry.setIndex(index);
-    // Black "curtains" under each ridge hide the ridges behind it.
+    // Black curtains under each ridge give hidden-line removal.
     this.curtains = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
       color: 0x000000, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
     }));
     this.curtains.frustumCulled = false;
-    this.curtains.renderOrder = 0;
     this.scene.add(this.curtains);
-    this.ridges = new Wires(this.scene, 1.25);
+    this.ridges = new Wires(this.scene, 1.2);
   }
 
   buildArray() {
-    const plateShape = new THREE.Shape(hexPoints(PLATE_R, 0).map((p) => new THREE.Vector2(p.x, p.y)));
-    this.plate = new THREE.Mesh(new THREE.ShapeGeometry(plateShape), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide }));
-    this.plate.position.z = -0.004;
-    this.plate.renderOrder = 0;
-    this.scene.add(this.plate);
-    this.frameWires = new Wires(this.scene, 1.7);
+    const group = new THREE.Group();
+    group.position.copy(ARRAY_POS);
+    group.rotation.x = -TILT;
+    this.scene.add(group);
+    const plateShape = new THREE.Shape(hexPoints(PLATE_R).map((p) => new THREE.Vector2(p.x, p.y)));
+    const plate = new THREE.Mesh(new THREE.ShapeGeometry(plateShape), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide }));
+    plate.position.z = -0.004;
+    group.add(plate);
+    const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.05, 6, 1, false, Math.PI / 2).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+    pod.position.z = -0.035;
+    group.add(pod);
+    const base = new THREE.Vector3(ARRAY_POS.x, 0, ARRAY_POS.z + 0.05);
+    this.mastTop = toWorld(new THREE.Vector3(0, -0.28, -0.03));
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1, 12), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+    mast.position.copy(base).lerp(this.mastTop, 0.5);
+    mast.scale.y = base.distanceTo(this.mastTop);
+    this.scene.add(mast);
+    this.mastBase = base;
+
+    const figure = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(FIGURE.map(([x, y]) => new THREE.Vector2(x, y)))), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide }));
+    figure.position.copy(FIGURE_POS);
+    figure.rotation.y = 0.25;
+    this.scene.add(figure);
+    this.figure = figure;
+
+    this.structWires = new Wires(this.scene, 1.5);
     this.detailWires = new Wires(this.scene, 1.0);
     this.ringWires = new Wires(this.scene, 1.35);
     this.micGlows = this.mics.map((p) => {
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-      sprite.position.copy(p).setZ(0.004);
-      sprite.scale.setScalar(0.05);
+      sprite.position.copy(p).add(this.forward.clone().multiplyScalar(0.004));
       sprite.renderOrder = 3;
       this.scene.add(sprite);
       return sprite;
     });
-    // Octilinear signal routes from the hub to every port.
-    this.routes = this.mics.map((mic) => {
+    this.routes = this.micsLocal.map((mic) => {
       const angle = Math.atan2(mic.y, mic.x);
       const start = new THREE.Vector3(Math.cos(angle) * 0.053, Math.sin(angle) * 0.053, 0);
       const dx = mic.x - start.x; const dy = mic.y - start.y;
@@ -253,26 +303,28 @@ export class Teaser {
         : new THREE.Vector3(mic.x, start.y + Math.sign(dy) * Math.abs(dx), 0);
       const toPort = mic.clone().sub(bend);
       const stop = toPort.length() > 0.012 ? mic.clone().sub(toPort.normalize().multiplyScalar(0.0115)) : bend;
-      return [stop, bend, start];
+      return [stop, bend, start].map((p) => toWorld(p.setZ(0.002)));
     });
   }
 
   buildDynamics() {
-    this.particleWires = new Wires(this.scene, 1.5, 3);
+    this.particleWires = new Wires(this.scene, 1.4, 3);
     this.heads = this.mics.map(() => {
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-      sprite.scale.setScalar(0.05);
+      sprite.scale.setScalar(0.07);
       sprite.renderOrder = 4;
       this.scene.add(sprite);
       return sprite;
     });
     this.waveWires = new Wires(this.scene, 1.0);
-    this.waveHit = new Wires(this.scene, 2.6, 3);
+    this.hitWires = new Wires(this.scene, 2.4, 3);
+    this.fieldWires = new Wires(this.scene, 2.0, 3);
     this.convergeWires = new Wires(this.scene, 1.1, 3);
-    this.beamWires = new Wires(this.scene, 3.4, 3);
-    this.beamCore = new Wires(this.scene, 1.2, 4);
+    this.beamWires = new Wires(this.scene, 3.2, 3);
+    this.beamCore = new Wires(this.scene, 1.1, 4);
     this.focusGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
     this.focusGlow.position.copy(this.F);
+    this.focusGlow.scale.setScalar(0.3);
     this.scene.add(this.focusGlow);
   }
 
@@ -291,7 +343,7 @@ export class Teaser {
     const positions = []; const index = []; const n = 8;
     for (let j = 0; j <= n; j++) {
       for (let i = 0; i <= n; i++) {
-        const p = direction(lerp(this.azEdges[col], this.azEdges[col + 1], i / n), lerp(this.elEdges[row], this.elEdges[row + 1], j / n)).multiplyScalar(DOME_R);
+        const p = toWorld(direction(lerp(this.azEdges[col], this.azEdges[col + 1], i / n), lerp(this.elEdges[row], this.elEdges[row + 1], j / n)).multiplyScalar(DOME_R));
         positions.push(p.x, p.y, p.z);
       }
     }
@@ -302,10 +354,13 @@ export class Teaser {
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setIndex(index);
     this.lockFill = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
-      color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
+      color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
     }));
-    this.lockFill.renderOrder = 1;
     this.scene.add(this.lockFill);
+    this.sectorCenter = (k) => {
+      const r = Math.floor(k / this.array.columns); const c = k % this.array.columns;
+      return toWorld(direction(this.array.azimuth_deg[c], this.array.elevation_deg[r]).multiplyScalar(DOME_R));
+    };
   }
 
   sectorOutline(k, radius) {
@@ -313,7 +368,7 @@ export class Teaser {
     const a0 = this.azEdges[col]; const a1 = this.azEdges[col + 1]; const e0 = this.elEdges[row]; const e1 = this.elEdges[row + 1];
     const points = [];
     for (const [fa, fe, ta, te] of [[a0, e0, a1, e0], [a1, e0, a1, e1], [a1, e1, a0, e1], [a0, e1, a0, e0]]) {
-      for (let s = 0; s < 8; s++) points.push(direction(lerp(fa, ta, s / 8), lerp(fe, te, s / 8)).multiplyScalar(radius));
+      for (let s = 0; s < 8; s++) points.push(toWorld(direction(lerp(fa, ta, s / 8), lerp(fe, te, s / 8)).multiplyScalar(radius)));
     }
     return points;
   }
@@ -321,10 +376,10 @@ export class Teaser {
   buildDrone() {
     this.drone = new THREE.Group();
     this.drone.position.copy(this.D);
-    this.drone.rotation.set(0.12, 0.5, -0.06);
+    this.drone.rotation.set(0.1, 0.6, -0.08);
+    this.drone.scale.setScalar(1.6);
     this.scene.add(this.drone);
-    this.droneBody = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, 0.06), new THREE.MeshBasicMaterial({ color: 0x000000 }));
-    this.drone.add(this.droneBody);
+    this.drone.add(new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, 0.06), new THREE.MeshBasicMaterial({ color: 0x000000 })));
     this.discs = [];
     for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
       const disc = new THREE.Mesh(new THREE.CircleGeometry(0.055, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({
@@ -334,27 +389,56 @@ export class Teaser {
       this.drone.add(disc);
       this.discs.push(disc);
     }
+    this.droneHalo = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    this.droneHalo.position.copy(this.D).add(this.u.clone().multiplyScalar(2.5));
+    this.droneHalo.scale.setScalar(4.5);
+    this.scene.add(this.droneHalo);
     this.droneWires = new Wires(this.scene, 1.4, 3);
-    this.printWires = new Wires(this.scene, 1.8, 3);
+
+    // Frame for the wake: `back` runs from the drone towards the array, `lift` is up relative to the beam.
+    this.back = this.u.clone().negate();
+    this.across = new THREE.Vector3().crossVectors(this.u, new THREE.Vector3(0, 1, 0)).normalize();
+    this.lift = new THREE.Vector3().crossVectors(this.across, this.u).normalize();
+    const slices = Math.ceil(WAKE.life / WAKE.dt) + 2;
+    const columns = WAKE.points;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(slices * (columns + 1) * 2 * 3), 3));
+    const index = [];
+    for (let r = 0; r < slices; r++) {
+      const base = r * (columns + 1) * 2;
+      for (let c = 0; c < columns; c++) {
+        const a = base + c * 2;
+        index.push(a, a + 1, a + 2, a + 2, a + 1, a + 3);
+      }
+    }
+    geometry.setIndex(index);
+    this.wakeCurtains = new THREE.Mesh(geometry, this.curtains.material);
+    this.wakeCurtains.frustumCulled = false;
+    this.scene.add(this.wakeCurtains);
+    this.wakeSlices = slices;
+    this.wakeWires = new Wires(this.scene, 1.3, 3);
   }
 
   // ── Camera ───────────────────────────────────────────────────────────────
   keys() {
     if (this._keys) return this._keys;
     const v = (x, y, z) => new THREE.Vector3(x, y, z);
-    const D = this.D; const u = this.u;
+    const A = ARRAY_POS; const u = this.u; const D = this.D;
     const side = new THREE.Vector3().crossVectors(u, v(0, 1, 0)).normalize();
+    const lift = new THREE.Vector3().crossVectors(side, u).normalize();
+    const along = (d) => A.clone().add(u.clone().multiplyScalar(d));
     this._keys = [
-      { t: 0.0, p: v(0, -0.925, 4.0), l: v(0, -0.93, 0), fov: 30 },
-      { t: 2.8, p: v(0, -0.9, 3.95), l: v(0, -0.93, 0), fov: 30 },
-      { t: 5.2, p: v(0, 0.08, 4.4), l: v(0, -0.95, -0.3), fov: 34 },
-      { t: 7.4, p: v(0.1, 0.28, 3.3), l: v(0, -0.35, -0.2), fov: 34 },
-      { t: 9.0, p: v(0.25, 0.18, 2.1), l: v(0, -0.06, 0), fov: 32 },
-      { t: 10.4, p: v(0.5, 0.12, 1.5), l: v(0, 0, 0), fov: 32 },
-      { t: 12.0, p: v(1.95, 0.55, 1.4), l: v(0.05, 0.08, 0.3), fov: 38 },
-      { t: 13.9, p: v(0.45, 0.3, -1.0), l: u.clone().multiplyScalar(2.4), fov: 42 },
-      { t: 15.5, p: D.clone().sub(u.clone().multiplyScalar(1.9)).add(side.clone().multiplyScalar(-0.3)).add(v(0, -0.12, 0)), l: D.clone().add(side.clone().multiplyScalar(0.12)), fov: 34 },
-      { t: 17.0, p: D.clone().sub(u.clone().multiplyScalar(1.7)).add(side.clone().multiplyScalar(-0.24)).add(v(0, -0.1, 0)), l: D.clone().add(side.clone().multiplyScalar(0.12)), fov: 34 },
+      { t: T.fadeIn, p: v(0, 1.0, 4.0), l: v(0, 2.1, -12), fov: 32 },
+      { t: 7.4, p: v(0.08, 1.45, -2.2), l: v(0, 2.2, -12), fov: 32 },
+      { t: 9.6, p: v(0.35, 2.15, -8.1), l: A.clone(), fov: 32 },
+      { t: 11.8, p: v(0.95, 2.45, -9.55), l: A.clone(), fov: 32 },
+      { t: 14.0, p: v(2.2, 2.95, -10.4), l: A.clone().add(v(0, 0.1, 0)), fov: 34 },
+      { t: 15.3, p: v(1.95, 2.7, -10.25), l: A.clone().add(v(0, 0.1, 0)), fov: 34 },
+      { t: 16.7, p: v(1.5, 1.3, -12.75), l: along(5.5), fov: 46 },
+      { t: 17.6, p: v(1.25, 1.35, -13.1), l: along(7), fov: 46 },
+      // Above the beam, looking down its spectral wake at the drone.
+      { t: 20.0, p: along(12.6).addScaledVector(side, -0.35).addScaledVector(lift, 0.55), l: D.clone().addScaledVector(lift, -0.25).addScaledVector(side, 0.1), fov: 34 },
+      { t: T.black, p: along(13.3).addScaledVector(side, -0.25).addScaledVector(lift, 0.45), l: D.clone().addScaledVector(lift, -0.22).addScaledVector(side, 0.08), fov: 34 },
     ];
     return this._keys;
   }
@@ -373,19 +457,13 @@ export class Teaser {
       const m2 = k3 ? k3[key].clone().sub(k1[key]).multiplyScalar(dt / (k3.t - k1.t)) : new THREE.Vector3();
       return k1[key].clone().multiplyScalar(h00).add(m1.multiplyScalar(h10)).add(k2[key].clone().multiplyScalar(h01)).add(m2.multiplyScalar(h11));
     };
-    return { p: interp('p'), l: interp('l'), fov: lerp(k1.fov, k2.fov, smooth(s)), offset: 0 };
-  }
-
-  titleCamera(t) {
-    const k = easeOut(range01(t, T.title, T.end));
-    return { p: new THREE.Vector3(lerp(0.12, 0.04, k), lerp(0.05, 0.02, k), lerp(2.45, 2.15, k)), l: new THREE.Vector3(0, 0, 0), fov: 30, offset: -560 };
+    return { p: interp('p'), l: interp('l'), fov: lerp(k1.fov, k2.fov, smooth(s)) };
   }
 
   setCamera(pose) {
     this.camera.position.copy(pose.p);
     this.camera.fov = pose.fov;
     this.camera.aspect = W / H;
-    if (pose.offset) this.camera.setViewOffset(W, H, pose.offset, 0, W, H); else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
     this.camera.lookAt(pose.l);
     this.camera.updateMatrixWorld();
@@ -393,8 +471,9 @@ export class Teaser {
 
   // ── Frame update ─────────────────────────────────────────────────────────
   update(t) {
-    this.stars.material.opacity = 0.5 * smooth(range01(t, 3.5, 7.0));
-    this.updateTerrain(t);
+    this.halo.material.color.setRGB(0.06, 0.13, 0.19);
+    this.updateRain(t);
+    this.updateLand(t);
     this.updateArray(t);
     this.updateParticles(t);
     this.updateWave(t);
@@ -403,42 +482,44 @@ export class Teaser {
     this.updateDrone(t);
   }
 
-  updateTerrain(t) {
-    const fadeOut = 1 - smooth(range01(t, 8.4, 10.6));
-    const visible = t >= T.lineIn && fadeOut > 0.001;
-    this.curtains.visible = visible;
+  updateRain(t) {
+    const rain = this.rain.begin();
+    const cam = this.camera.position;
+    const wrap = (v, span) => ((((v % span) + span) % span) - span / 2);
+    for (let i = 0; i < 700; i++) {
+      const x = cam.x + wrap(hash(i, 21) * 40 - cam.x, 16);
+      const z = cam.z - 3 + wrap(hash(i, 22) * 40 - cam.z, 16);
+      const y = cam.y + 6 - ((t * 5.5 + hash(i, 23) * 12) % 12);
+      const top = new THREE.Vector3(x, y, z);
+      const k = 0.14 * this.fog(top, 1, 7);
+      rain.seg(top, new THREE.Vector3(x - 0.03, y - 0.42, z), scale(WIRE, 0), scale(WIRE, k));
+    }
+    rain.end();
+  }
+
+  updateLand(t) {
+    const { rows, cols, zNear, dz, xHalf } = LAND;
     const ridges = this.ridges.begin();
-    if (!visible) { ridges.end(); return; }
-    const lineIn = smooth(range01(t, T.lineIn, 1.2));
-    const tremble = smooth(range01(t, 1.3, 2.8));
-    const spread = smooth(range01(t, T.spread, 4.3));
-    const s = this.scroll(t);
-    const base = Math.floor(s); const frac = s - base;
     const positions = this.curtains.geometry.attributes.position;
     let v = 0;
-    for (let r = 0; r < ROWS; r++) {
-      const j = base + r;
-      const z = Z_NEAR - (r - frac) * DZ;
-      // Before the terrain spreads out only the front ridge exists: silence, then a tremble.
-      const front = r === 0 && t < T.spread + 1.4;
-      const frame = front && t < T.spread ? t * 30 : j * 2;
-      const amp = front ? lerp(0.08 * tremble, 1, spread) : spread;
-      let bright = (front ? lineIn : spread) * fadeOut * Math.pow(1 - r / ROWS, 1.4);
-      if (r === 0 && t >= T.spread) bright *= 1 - frac;
+    const appear = smooth(range01(t, T.fadeIn, 6.4));
+    for (let r = 0; r < rows; r++) {
+      const z = zNear - r * dz;
+      const rowFog = this.fog(new THREE.Vector3(this.camera.position.x, 0, z), 3, 20);
       const points = [];
-      for (let c = 0; c <= COLS; c++) {
-        const x = -X_HALF + (2 * X_HALF * c) / COLS;
-        const h = amp * this.heightAt(x, frame);
-        const y = BASE_Y + h;
-        points.push([x, y, h]);
-        positions.setXYZ(v++, x, y, z);
-        positions.setXYZ(v++, x, BASE_Y - 0.03, z);
+      for (let c = 0; c <= cols; c++) {
+        const x = -xHalf + (2 * xHalf * c) / cols;
+        const h = this.landHeight(x, r, t);
+        points.push([x, h]);
+        positions.setXYZ(v++, x, h, z);
+        positions.setXYZ(v++, x, -0.05, z);
       }
+      const bright = appear * rowFog;
       if (bright < 0.004) continue;
-      for (let c = 0; c < COLS; c++) {
-        const [x0, y0, h0] = points[c]; const [x1, y1, h1] = points[c + 1];
-        const color = (h) => mix(scale(WIRE, 0.62), scale(SIGNAL, 2.6), smooth(range01(h / AMP, 0.16, 0.62))).map((q) => q * bright);
-        ridges.seg(new THREE.Vector3(x0, y0, z), new THREE.Vector3(x1, y1, z), color(h0), color(h1));
+      for (let c = 0; c < cols; c++) {
+        const [x0, y0] = points[c]; const [x1, y1] = points[c + 1];
+        const color = (y) => mix(scale(WIRE, 0.42), scale(MAGENTA, 1.5), smooth(range01(y / LAND.amp, 0.12, 0.55))).map((q) => q * bright);
+        ridges.seg(new THREE.Vector3(x0, y0, z), new THREE.Vector3(x1, y1, z), color(y0), color(y1));
       }
     }
     positions.needsUpdate = true;
@@ -446,75 +527,69 @@ export class Teaser {
   }
 
   micState(m, t) {
-    // Returns [color, glow] for microphone m at time t.
     const arrive = this.arrive[m];
     if (t < arrive) return [[0, 0, 0], 0];
-    let color = scale(WIRE, 0.75);
-    let glow = 0.25;
-    const pop = Math.exp(-(t - arrive) / 0.14);
-    color = mix(color, scale(SIGNAL, 2.0), pop);
-    glow += 0.6 * pop;
+    const pop = Math.exp(-(t - arrive) / 0.16);
+    let color = mix(scale(WIRE, 0.85), scale(WIRE, 2.2), pop);
+    let glow = 0.3 + 0.6 * pop;
     const hit = this.waveTime[m];
     if (t > hit - 0.1) {
       const flash = Math.exp(-(((t - hit) / 0.05) ** 2));
-      const armed = t < 16.6 ? smooth(range01(t, hit, hit + 0.12)) : 0;
-      color = mix(color, scale(SIGNAL, 1.4), armed);
-      color = mix(color, [1.8, 1.55, 1.3], flash);
-      glow += 0.7 * flash + 0.3 * armed;
-    }
-    if (t > T.title) {
-      const r = this.mics[m].length();
-      const k = smooth(range01(t, T.title, T.titleFull));
-      color = mix(color, scale(WIRE, 0.95 + 0.35 * Math.sin(t * 3.2 - r * 22)), k);
-      glow = lerp(glow, 0.45 + 0.25 * Math.sin(t * 3.2 - r * 22), k);
+      const armed = t < T.fadeOut ? smooth(range01(t, hit, hit + 0.15)) : 0;
+      color = mix(color, scale(SIGNAL, 1.3), armed);
+      color = mix(color, [1.9, 1.3, 1.6], flash);
+      glow += 0.8 * flash + 0.25 * armed;
     }
     return [color, glow];
   }
 
   updateArray(t) {
-    const visible = t >= T.frameDraw - 0.2;
-    this.plate.visible = visible;
-    const frame = this.frameWires.begin(); const detail = this.detailWires.begin(); const rings = this.ringWires.begin();
-    if (visible) {
-      const draw = easeInOut(range01(t, T.frameDraw, 9.7));
-      const titleDim = 1;
-      const frameColor = () => scale(WIRE, 0.85 * titleDim);
-      for (const z of [0.003, -0.01]) {
-        frame.polyline(hexPoints(PLATE_R, z), frameColor, true, draw);
-        frame.polyline(hexPoints(PLATE_R - 0.02, z), () => scale(WIRE, 0.35), true, draw);
-      }
-      detail.polyline(hexPoints(0.058, 0.003, Math.PI / 6), () => scale(WIRE, 0.8), true, draw);
-      detail.polyline(hexPoints(0.032, 0.003, Math.PI / 6), () => scale(SIGNAL, 1.2 * draw), true, draw);
-      this.mics.forEach((mic, m) => {
-        const [color, glow] = this.micState(m, t);
-        const arrive = this.arrive[m];
-        const sprite = this.micGlows[m];
-        sprite.visible = t >= arrive;
-        sprite.material.color.setRGB(color[0] * glow, color[1] * glow, color[2] * glow);
-        sprite.scale.setScalar(0.03 + 0.03 * Math.min(1.2, glow));
-        if (t < arrive) return;
-        const grow = easeOut(range01(t, arrive, arrive + 0.18));
-        const radius = 0.0095 * (grow + 0.5 * Math.exp(-(t - arrive) / 0.1));
-        const ring = Array.from({ length: 20 }, (_, i) => {
-          const a = (i / 20) * Math.PI * 2;
-          return new THREE.Vector3(mic.x + radius * Math.cos(a), mic.y + radius * Math.sin(a), 0.003);
-        });
-        rings.polyline(ring, () => color, true);
-        const route = this.routes[m];
-        const reach = easeOut(range01(t, arrive, arrive + 0.4));
-        detail.polyline(route.map((p) => p.clone().setZ(0.002)), () => scale(WIRE, 0.32), false, reach);
-      });
-    } else {
-      this.micGlows.forEach((sprite) => { sprite.visible = false; });
+    const struct = this.structWires.begin(); const detail = this.detailWires.begin(); const rings = this.ringWires.begin();
+    const lit = easeInOut(range01(t, T.frameDraw, 10.2));
+    const silhouette = 0.22 * this.fog(ARRAY_POS, 2, 14);
+    const frameK = lerp(silhouette, 0.95, lit);
+    const plate = (r) => hexPoints(r).map((p) => toWorld(p.setZ(0.003)));
+    struct.polyline(plate(PLATE_R), () => scale(WIRE, frameK), true);
+    struct.polyline(plate(PLATE_R - 0.02), () => scale(WIRE, frameK * 0.4), true);
+    struct.polyline(hexPoints(PLATE_R).map((p) => toWorld(p.setZ(-0.012))), () => scale(WIRE, frameK * 0.6), true);
+    // Mast and the watchman, rim-lit from the valley glow.
+    const mastK = 0.22 * this.fog(this.mastBase, 2, 16);
+    for (const dx of [-0.03, 0.03]) struct.seg(this.mastBase.clone().add(new THREE.Vector3(dx, 0, 0)), this.mastTop.clone().add(new THREE.Vector3(dx, 0, 0)), scale(WIRE, mastK));
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + 0.4;
+      struct.seg(this.mastBase.clone().add(new THREE.Vector3(0, 0.55, 0)), this.mastBase.clone().add(new THREE.Vector3(0.45 * Math.cos(a), 0, 0.45 * Math.sin(a))), scale(WIRE, mastK * 0.8));
     }
-    frame.end(); detail.end(); rings.end();
+    const figureK = 0.3 * this.fog(FIGURE_POS, 2, 16) * smooth(range01(t, T.fadeIn, 7));
+    this.figure.updateMatrixWorld();
+    const outline = FIGURE.map(([x, y]) => new THREE.Vector3(x, y, 0.002).applyMatrix4(this.figure.matrixWorld));
+    struct.polyline(outline, () => scale(WIRE, figureK), true);
+    detail.polyline(hexPoints(0.058, Math.PI / 6).map((p) => toWorld(p.setZ(0.003))), () => scale(WIRE, 0.85 * lit), true);
+    detail.polyline(hexPoints(0.032, Math.PI / 6).map((p) => toWorld(p.setZ(0.003))), () => scale(SIGNAL, 1.1 * lit), true);
+    this.mics.forEach((mic, m) => {
+      const [color, glow] = this.micState(m, t);
+      const arrive = this.arrive[m];
+      const sprite = this.micGlows[m];
+      sprite.visible = t >= arrive && t < T.black;
+      sprite.material.color.setRGB(color[0] * glow, color[1] * glow, color[2] * glow);
+      sprite.scale.setScalar(0.03 + 0.03 * Math.min(1.2, glow));
+      if (t < arrive) return;
+      const grow = easeOut(range01(t, arrive, arrive + 0.2));
+      const radius = 0.0095 * (grow + 0.5 * Math.exp(-(t - arrive) / 0.1));
+      const ring = Array.from({ length: 20 }, (_, i) => {
+        const a = (i / 20) * Math.PI * 2;
+        return toWorld(this.micsLocal[m].clone().add(new THREE.Vector3(radius * Math.cos(a), radius * Math.sin(a), 0.003)));
+      });
+      rings.polyline(ring, () => color, true);
+      detail.polyline(this.routes[m], () => scale(WIRE, 0.3), false, easeOut(range01(t, arrive, arrive + 0.45)));
+    });
+    struct.end(); detail.end(); rings.end();
   }
 
   bezier(m, s) {
     const end = this.mics[m];
-    const start = new THREE.Vector3(lerp(-1.7, 1.7, hash(m, 3)), BASE_Y + 0.05 + 0.2 * hash(m, 5), lerp(-1.6, 1.3, hash(m, 7)));
-    const c1 = start.clone().add(new THREE.Vector3(0, 0.95, 0));
-    const c2 = end.clone().add(new THREE.Vector3(0, 0.3, 0.9));
+    const start = new THREE.Vector3(lerp(-2.4, 2.4, hash(m, 3)), 0.05, ARRAY_POS.z + lerp(-2.5, 3.2, hash(m, 7)));
+    const c1 = start.clone().add(new THREE.Vector3(0, 1.6, 0));
+    const c2 = end.clone().add(this.forward.clone().multiplyScalar(0.9)).add(new THREE.Vector3(0, 0.2, 0));
     const a = 1 - s;
     return start.multiplyScalar(a * a * a).add(c1.multiplyScalar(3 * a * a * s)).add(c2.multiplyScalar(3 * a * s * s)).add(end.clone().multiplyScalar(s * s * s));
   }
@@ -524,103 +599,108 @@ export class Teaser {
     this.mics.forEach((_, m) => {
       const t0 = this.riseStart[m];
       const head = this.heads[m];
-      const s = easeInOut(range01(t, t0, t0 + 1.3));
-      const active = t >= t0 && t <= t0 + 1.32;
+      const s = easeInOut(range01(t, t0, t0 + 1.4));
+      const active = t >= t0 && t <= t0 + 1.42;
       head.visible = active;
       if (!active) return;
-      const intensity = smooth(range01(t, t0, t0 + 0.15));
+      const k = smooth(range01(t, t0, t0 + 0.2));
       const trail = [];
-      for (let i = 0; i <= 14; i++) trail.push(this.bezier(m, Math.max(0, s - 0.22 * (1 - i / 14))));
-      wires.polyline(trail, (k) => mix(scale(SIGNAL, 0.0), scale(SIGNAL, 2.4 * intensity), k * k));
+      for (let i = 0; i <= 14; i++) trail.push(this.bezier(m, Math.max(0, s - 0.24 * (1 - i / 14))));
+      wires.polyline(trail, (q) => mix(scale(VIOLET, 0), scale(WIRE, 1.9 * k), q * q));
       head.position.copy(trail.at(-1));
-      head.material.color.setRGB(1.3 * intensity, 0.62 * intensity, 0.25 * intensity);
+      head.material.color.setRGB(0.55 * k, 0.95 * k, 1.2 * k);
     });
     wires.end();
   }
 
   updateWave(t) {
-    const wave = this.waveWires.begin(); const hit = this.waveHit.begin();
-    const vis = window01(t, T.wave, T.wave + 0.35, T.wave + 1.55, T.wave + 1.95);
+    const wave = this.waveWires.begin(); const hit = this.hitWires.begin(); const field = this.fieldWires.begin();
+    const vis = window01(t, T.wave, T.wave + 0.5, T.cross + 0.6, T.cross + 1.1);
     if (vis > 0.002) {
       const u = this.u;
       const e1 = new THREE.Vector3().crossVectors(u, new THREE.Vector3(0, 1, 0)).normalize();
       const e2 = new THREE.Vector3().crossVectors(e1, u).normalize();
-      const d = 1.35 - 1.1 * (t - T.wave);
-      const center = u.clone().multiplyScalar(d);
-      const n = 18; const half = 1.05; const pieces = 24;
+      const d = WAVE_START - WAVE_SPEED * (t - T.wave);
+      const center = ARRAY_POS.clone().add(u.clone().multiplyScalar(d));
+      const n = 20; const half = 1.5; const pieces = 26;
       const at = (a, b) => center.clone().add(e1.clone().multiplyScalar(a)).add(e2.clone().multiplyScalar(b));
-      const fade = (a, b) => 0.55 * vis * Math.exp(-(((a * a + b * b) / (0.9 * 0.9)) ** 2));
+      const fade = (a, b) => 0.55 * vis * Math.exp(-(((a * a + b * b) / (1.25 * 1.25)) ** 2));
       for (let i = 0; i <= n; i++) {
         const fixed = -half + (2 * half * i) / n;
         for (let p = 0; p < pieces; p++) {
           const q0 = -half + (2 * half * p) / pieces; const q1 = -half + (2 * half * (p + 1)) / pieces;
-          wave.seg(at(fixed, q0), at(fixed, q1), scale(WIRE, fade(fixed, q0)), scale(WIRE, fade(fixed, q1)));
-          wave.seg(at(q0, fixed), at(q1, fixed), scale(WIRE, fade(q0, fixed)), scale(WIRE, fade(q1, fixed)));
+          wave.seg(at(fixed, q0), at(fixed, q1), scale(VIOLET, fade(fixed, q0)), scale(VIOLET, fade(fixed, q1)));
+          wave.seg(at(q0, fixed), at(q1, fixed), scale(VIOLET, fade(q0, fixed)), scale(VIOLET, fade(q1, fixed)));
         }
       }
-      // Where the wavefront currently cuts the board.
-      const ux = u.x; const uy = u.y; const n2 = ux * ux + uy * uy;
-      const p0 = new THREE.Vector3((d * ux) / n2, (d * uy) / n2, 0.005);
+      // Where the wavefront currently cuts the board (array frame, then to world).
+      const ul = this.uLocal; const n2 = ul.x * ul.x + ul.y * ul.y;
+      const p0 = new THREE.Vector3((d * ul.x) / n2, (d * ul.y) / n2, 0.005);
       const r0 = p0.length(); const reach = PLATE_R - 0.004;
       if (r0 < reach) {
-        const along = new THREE.Vector3(-uy, ux, 0).normalize().multiplyScalar(Math.sqrt(reach * reach - r0 * r0));
-        hit.seg(p0.clone().sub(along), p0.clone().add(along), scale(SIGNAL, 3.2 * vis));
+        const along = new THREE.Vector3(-ul.y, ul.x, 0).normalize().multiplyScalar(Math.sqrt(reach * reach - r0 * r0));
+        hit.seg(toWorld(p0.clone().sub(along)), toWorld(p0.clone().add(along)), scale(MAGENTA, 3.0 * vis));
       }
     }
-    wave.end(); hit.end();
+    // A.T.-field-like hexagonal ripple as the wave crosses the array's centre.
+    for (let k = 0; k < 5; k++) {
+      const age = t - (T.cross + k * 0.14);
+      if (age < 0 || age > 1.4) continue;
+      const r = PLATE_R + 0.03 + 2.4 * easeOut(age / 1.4);
+      const intensity = 1.5 * Math.pow(1 - age / 1.4, 1.6);
+      field.polyline(hexPoints(r).map((p) => toWorld(p.setZ(0.01))), () => scale(mix(SIGNAL, MAGENTA, k / 4), intensity), true);
+    }
+    wave.end(); hit.end(); field.end();
   }
 
   updateBeam(t) {
     const lines = this.convergeWires.begin(); const beam = this.beamWires.begin(); const core = this.beamCore.begin();
-    const fade = 1 - smooth(range01(t, 16.4, 17.2));
-    if (t >= T.converge && fade > 0.001) {
-      this.mics.forEach((mic, m) => {
-        const start = this.waveTime[m] + 0.12;
-        const q = easeOut(range01(t, start, start + 0.45));
-        if (q <= 0) return;
-        const end = mic.clone().lerp(this.F, q);
-        const points = Array.from({ length: 7 }, (_, i) => mic.clone().lerp(end, i / 6));
-        const settle = 1 - 0.65 * smooth(range01(t, 13.6, 14.4));
-        lines.polyline(points, (k) => mix(scale(WIRE, 0.4 * fade * settle), scale(SIGNAL, 1.5 * fade * settle), k * q));
-      });
-      const reach = easeInOut(range01(t, T.beam, 13.75));
-      if (reach > 0) {
-        const tip = this.F.clone().lerp(this.D, reach);
-        const points = Array.from({ length: 24 }, (_, i) => this.F.clone().lerp(tip, i / 23));
-        beam.polyline(points, (k) => scale(SIGNAL, (3.4 - 1.4 * k) * fade));
-        core.polyline(points, () => [2.4 * fade, 2.1 * fade, 1.8 * fade]);
-      }
+    const fade = 1 - smooth(range01(t, T.fadeOut, T.black));
+    const settle = 1 - 0.6 * smooth(range01(t, 16.4, 17.4));
+    this.mics.forEach((mic, m) => {
+      const start = this.waveTime[m] + 0.1;
+      const q = easeOut(range01(t, start, start + 0.5));
+      if (q <= 0) return;
+      const end = mic.clone().lerp(this.F, q);
+      const points = Array.from({ length: 7 }, (_, i) => mic.clone().lerp(end, i / 6));
+      lines.polyline(points, (k) => mix(scale(WIRE, 0.45 * fade * settle), scale(SIGNAL, 1.4 * fade * settle), k * q));
+    });
+    const reach = easeInOut(range01(t, T.beam, T.beam + 1.1));
+    if (reach > 0) {
+      const tip = this.F.clone().lerp(this.D, reach);
+      const points = Array.from({ length: 40 }, (_, i) => this.F.clone().lerp(tip, i / 39));
+      beam.polyline(points, (k) => scale(SIGNAL, (3.2 - 1.2 * k) * fade));
+      core.polyline(points, () => [2.2 * fade, 1.9 * fade, 1.7 * fade]);
     }
-    const focus = smooth(range01(t, 12.5, 13.0)) * fade;
+    const focus = smooth(range01(t, T.cross + 0.2, T.cross + 0.7)) * fade;
     this.focusGlow.visible = focus > 0.001;
-    this.focusGlow.material.color.setRGB(2.6 * focus, 1.2 * focus, 0.4 * focus);
-    this.focusGlow.scale.setScalar(0.22);
+    this.focusGlow.material.color.setRGB(2.2 * focus, 1.0 * focus, 0.35 * focus);
     lines.end(); beam.end(); core.end();
   }
 
   updateDome(t) {
     const dome = this.domeWires.begin(); const cursor = this.cursorWires.begin();
-    const vis = window01(t, T.dome, 13.4, 15.3, 16.2);
+    const vis = window01(t, T.dome, T.dome + 0.8, 17.9, 18.7);
     if (vis > 0.002) {
       const sectors = this.array.rows * this.array.columns;
-      for (let k = 0; k < sectors; k++) dome.polyline(this.sectorOutline(k, DOME_R), () => scale(WIRE, 0.26 * vis), true);
+      for (let k = 0; k < sectors; k++) dome.polyline(this.sectorOutline(k, DOME_R), () => scale(WIRE, 0.3 * vis), true);
       let k = this.lockSector;
-      if (t < T.lock) k = Math.floor((t - 13.0) / 0.0125) % sectors;
-      if (t >= 13.0) {
-        const locked = t >= T.lock;
-        cursor.polyline(this.sectorOutline(Math.max(0, k), DOME_R * 0.998), () => (locked ? scale(SIGNAL, 3.0 * vis) : scale(WIRE, 1.6 * vis)), true);
-      }
+      if (t < T.lock) k = Math.floor((t - T.dome) / 0.02) % sectors;
+      const locked = t >= T.lock;
+      cursor.polyline(this.sectorOutline(Math.max(0, k), DOME_R * 0.998), () => (locked ? scale(SIGNAL, 2.8 * vis) : scale(WIRE, 1.4 * vis)), true);
     }
-    const fill = t >= T.lock ? vis * (0.28 + 0.9 * Math.exp(-(t - T.lock) / 0.25)) : 0;
+    const fill = t >= T.lock ? vis * (0.2 + 0.7 * Math.exp(-(t - T.lock) / 0.3)) : 0;
     this.lockFill.visible = fill > 0.001;
     this.lockFill.material.color.setRGB(SIGNAL[0] * fill, SIGNAL[1] * fill, SIGNAL[2] * fill);
     dome.end(); cursor.end();
   }
 
   updateDrone(t) {
-    const wires = this.droneWires.begin(); const print = this.printWires.begin();
-    const vis = smooth(range01(t, T.drone, T.drone + 0.6)) * (1 - smooth(range01(t, 16.5, 17.3)));
+    const wires = this.droneWires.begin();
+    const vis = smooth(range01(t, T.drone, T.drone + 0.9)) * (1 - smooth(range01(t, T.fadeOut, T.black)));
     this.drone.visible = vis > 0.002;
+    this.droneHalo.visible = this.drone.visible;
+    this.droneHalo.material.color.setRGB(0.05 * vis, 0.1 * vis, 0.14 * vis);
     if (this.drone.visible) {
       this.drone.updateMatrixWorld(true);
       const local = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(this.drone.matrixWorld);
@@ -637,44 +717,82 @@ export class Teaser {
         wires.polyline(ring, () => scale(WIRE, 0.85 * vis), true);
         const spin = t * 37 + sx * 1.3 + sz * 0.7;
         wires.seg(local(sx * 0.085 + 0.05 * Math.cos(spin), 0.012, sz * 0.085 + 0.05 * Math.sin(spin)),
-          local(sx * 0.085 - 0.05 * Math.cos(spin), 0.012, sz * 0.085 - 0.05 * Math.sin(spin)), scale(WIRE, 0.6 * vis));
+          local(sx * 0.085 - 0.05 * Math.cos(spin), 0.012, sz * 0.085 - 0.05 * Math.sin(spin)), scale(WIRE, 0.55 * vis));
       }
       this.discs.forEach((disc) => disc.material.color.setRGB(0.05 * vis, 0.06 * vis, 0.08 * vis));
-      // Spectral fingerprint: the drone's rotor spectrum wrapped into a ring facing the camera.
-      const draw = easeOut(range01(t, T.print, T.print + 0.9));
-      if (draw > 0) {
-        const toCamera = this.camera.position.clone().sub(this.D).normalize();
-        const a1 = new THREE.Vector3().crossVectors(toCamera, new THREE.Vector3(0, 1, 0)).normalize();
-        const a2 = new THREE.Vector3().crossVectors(a1, toCamera).normalize();
-        // Circular spectrum analyser: one spoke per band, mirrored left/right.
-        const frame = t * 25;
-        const at = (radius, theta) => this.D.clone()
-          .add(a1.clone().multiplyScalar(radius * Math.cos(theta)))
-          .add(a2.clone().multiplyScalar(radius * Math.sin(theta)));
-        const spokes = 128; const r0 = 0.25;
-        const inner = [];
-        for (let i = 0; i < spokes; i++) {
-          const theta = Math.PI / 2 + (i / spokes) * Math.PI * 2 + t * 0.08;
-          inner.push(at(r0 - 0.012, theta));
-          if (i / spokes > draw) continue;
-          const mirrored = 1 - Math.abs(1 - (2 * i) / spokes);
-          const m = this.mag(frame, 1.5 + mirrored * 44);
-          const length = 0.012 + 0.2 * m;
-          print.seg(at(r0, theta), at(r0 + length, theta), scale(SIGNAL, 0.5 * vis), scale(SIGNAL, (0.8 + 2.4 * m) * vis));
-        }
-        print.polyline(inner, () => scale(WIRE, 0.3 * vis), true, draw);
-      }
     }
-    wires.end(); print.end();
+    wires.end();
+    this.updateWake(t, vis);
   }
 
-  render(pose) {
-    this.setCamera(pose);
-    this.composer.render();
+  /** Spectrum slices born at the drone every WAKE.dt, drifting back along the beam as ridgelines. */
+  updateWake(t, vis) {
+    const ridges = this.wakeWires.begin();
+    const positions = this.wakeCurtains.geometry.attributes.position;
+    const { dt, life, speed, start, half, base, amp, points } = WAKE;
+    const born0 = T.print - 0.1;   // the wake starts as the camera settles above the beam
+    const newest = Math.floor((t - born0) / dt);
+    let v = 0;
+    for (let s = 0; s < this.wakeSlices; s++) {
+      const j = newest - s;
+      const age = t - (born0 + j * dt);
+      const alive = vis > 0.002 && j >= 0 && age >= 0 && age <= life;
+      const origin = this.D.clone().addScaledVector(this.back, start + age * speed).addScaledVector(this.lift, base);
+      const line = [];
+      for (let c = 0; c <= points; c++) {
+        const x = -1 + (2 * c) / points; const ax = Math.abs(x);
+        // A canyon: quiet high bands along the beam, the loud low bands rising into walls on either side.
+        const h = alive ? amp * smooth(range01(age, 0, 0.35)) * smooth(range01(ax, 0.06, 0.32)) * (1 - smooth(range01(ax, 0.8, 1)))
+          * this.mag(j * 2, 1.5 + clamp((1 - ax) / 0.92) * 52) : 0;
+        const top = origin.clone().addScaledVector(this.across, x * half).addScaledVector(this.lift, h);
+        const bottom = alive ? origin.clone().addScaledVector(this.across, x * half).addScaledVector(this.lift, -0.03) : top;
+        positions.setXYZ(v++, top.x, top.y, top.z);
+        positions.setXYZ(v++, bottom.x, bottom.y, bottom.z);
+        line.push([top, h]);
+      }
+      if (!alive) continue;
+      const bright = vis * smooth(range01(age, 0, 0.3)) * (1 - smooth(range01(age, life * 0.55, life)));
+      const color = (h) => mix(scale(WIRE, 0.35), scale(mix(SIGNAL, MAGENTA, 0.3), 1.05), smooth(range01(h / amp, 0.1, 0.6))).map((q) => q * bright);
+      for (let c = 0; c < points; c++) ridges.seg(line[c][0], line[c + 1][0], color(line[c][1]), color(line[c + 1][1]));
+    }
+    positions.needsUpdate = true;
+    ridges.end();
   }
+
+  render() { this.composer.render(); }
 
   project(point) {
     const v = point.clone().project(this.camera);
     return { x: ((v.x + 1) / 2) * W, y: ((1 - v.y) / 2) * H, visible: v.z < 1 };
+  }
+
+  /** On-screen size in pixels of a world-space radius r around point. */
+  screenRadius(point, r) {
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const a = this.project(point); const b = this.project(point.clone().addScaledVector(right, r));
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+
+  // ── Sound cues ───────────────────────────────────────────────────────────
+  audioEvents() {
+    const events = [];
+    const add = (type, t, extra = {}) => events.push({ type, t: +t.toFixed(4), ...extra });
+    add('shimmer', 0.2, { t1: T.fadeIn + 0.4 });
+    add('pad', T.fadeIn - 0.4, { t1: T.black + 0.2 });
+    add('rain', 0.6, { t1: T.black });
+    this.micsLocal.forEach((p, m) => add('pluck', this.arrive[m], { pan: clamp(p.x / 0.3, -1, 1), index: m }));
+    add('swell', T.listen, { t1: T.listenOut });
+    add('whoosh', T.wave, { t1: T.cross + 0.4 });
+    for (let k = 0; k < 5; k++) add('ring', T.cross + k * 0.14, { index: k });
+    add('riser', T.beam, { t1: T.lock });
+    add('lock', T.lock);
+    add('swell', T.ascend, { t1: T.drone });
+    add('heartbeat', T.drone - 0.4, { t1: T.fadeOut + 0.2 });
+    add('drone', T.drone - 0.6, { t1: T.black });
+    add('chime', T.label);
+    add('boom', T.title);
+    add('shimmer', T.title, { t1: T.end });
+    add('pad', T.title, { t1: T.end, key: 'title' });
+    return events.sort((a, b) => a.t - b.t);
   }
 }

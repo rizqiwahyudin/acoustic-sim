@@ -5,6 +5,7 @@
  *   node demo/render.cjs                                        # heimdall-reveal MP4 with soundtrack
  *   node demo/render.cjs --scene demo/heimdall-teaser           # another scene directory
  *   node demo/render.cjs --stills 2.4,9.5                       # review stills only
+ *   node demo/render.cjs --scene demo/heimdall-teaser --audio   # soundtrack.wav only
  *   node demo/render.cjs --fps 10 --out preview.mp4
  *
  * Each frame is rendered from a virtual clock, so a slow (software) GPU only
@@ -21,7 +22,7 @@ const HEIGHT = 1080;
 const DURATION = 20;
 
 function parseArgs(argv) {
-  const args = { fps: 30, gpu: false, from: 0, to: DURATION, scene: path.join(__dirname, 'heimdall-reveal') };
+  const args = { fps: 30, gpu: false, from: 0, to: null, scene: path.join(__dirname, 'heimdall-reveal') };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     const next = () => argv[++i];
@@ -31,6 +32,7 @@ function parseArgs(argv) {
     else if (key === '--from') args.from = Number(next());
     else if (key === '--to') args.to = Number(next());
     else if (key === '--gpu') args.gpu = true;
+    else if (key === '--audio') args.audioOnly = true;
     else if (key === '--scene') args.scene = path.resolve(next());
     else if (key === '--python') args.python = next();
     else if (key === '--ffmpeg') args.ffmpeg = next();
@@ -100,6 +102,7 @@ async function main() {
   const url = `http://127.0.0.1:${server.address().port}/${scenePath}/index.html`;
   await page.goto(url);
   await page.waitForFunction(() => window.revealReady === true, null, { timeout: 180000 });
+  args.to ??= await page.evaluate((fallback) => window.DURATION || fallback, DURATION);
   const clip = { x: 0, y: 0, width: WIDTH, height: HEIGHT };
 
   if (args.stills) {
@@ -124,31 +127,35 @@ async function main() {
       const audio = spawnSync(python, [soundtrack, eventsFile, wavFile], { stdio: 'inherit', cwd: ROOT });
       if (audio.status !== 0) throw new Error('soundtrack synthesis failed');
     }
-    const audioArgs = hasAudio ? ['-ss', String(args.from), '-i', wavFile] : [];
-    const audioCodec = hasAudio ? ['-c:a', 'aac', '-b:a', '192k', '-shortest'] : [];
-    const ffmpeg = spawn(findFfmpeg(args, python), [
-      '-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(args.fps), '-c:v', 'png', '-i', '-',
-      ...audioArgs,
-      '-c:v', 'libx264', '-preset', 'slow', '-crf', '16', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
-      ...audioCodec, args.out,
-    ], { stdio: ['pipe', 'inherit', 'inherit'] });
-    const done = new Promise((resolve, reject) => ffmpeg.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`)))));
-    const first = Math.round(args.from * args.fps);
-    const last = Math.round(args.to * args.fps);
-    const started = Date.now();
-    for (let frame = first; frame < last; frame++) {
-      await page.evaluate((time) => window.renderFrame(time), frame / args.fps);
-      const png = await page.screenshot({ type: 'png', clip });
-      if (!ffmpeg.stdin.write(png)) await new Promise((resolve) => ffmpeg.stdin.once('drain', resolve));
-      if ((frame - first + 1) % 30 === 0) {
-        const doneFrames = frame - first + 1;
-        const eta = ((Date.now() - started) / doneFrames) * (last - frame - 1) / 1000;
-        console.log(`frame ${doneFrames}/${last - first}  ETA ${eta.toFixed(0)} s`);
+    if (args.audioOnly) {
+      if (!hasAudio) console.log('this scene has no soundtrack.py');
+    } else {
+      const audioArgs = hasAudio ? ['-ss', String(args.from), '-i', wavFile] : [];
+      const audioCodec = hasAudio ? ['-c:a', 'aac', '-b:a', '192k', '-shortest'] : [];
+      const ffmpeg = spawn(findFfmpeg(args, python), [
+        '-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(args.fps), '-c:v', 'png', '-i', '-',
+        ...audioArgs,
+        '-c:v', 'libx264', '-preset', 'slow', '-crf', '16', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+        ...audioCodec, args.out,
+      ], { stdio: ['pipe', 'inherit', 'inherit'] });
+      const done = new Promise((resolve, reject) => ffmpeg.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`)))));
+      const first = Math.round(args.from * args.fps);
+      const last = Math.round(args.to * args.fps);
+      const started = Date.now();
+      for (let frame = first; frame < last; frame++) {
+        await page.evaluate((time) => window.renderFrame(time), frame / args.fps);
+        const png = await page.screenshot({ type: 'png', clip });
+        if (!ffmpeg.stdin.write(png)) await new Promise((resolve) => ffmpeg.stdin.once('drain', resolve));
+        if ((frame - first + 1) % 30 === 0) {
+          const doneFrames = frame - first + 1;
+          const eta = ((Date.now() - started) / doneFrames) * (last - frame - 1) / 1000;
+          console.log(`frame ${doneFrames}/${last - first}  ETA ${eta.toFixed(0)} s`);
+        }
       }
+      ffmpeg.stdin.end();
+      await done;
+      console.log(`wrote ${args.out}`);
     }
-    ffmpeg.stdin.end();
-    await done;
-    console.log(`wrote ${args.out}`);
   }
   await browser.close();
   server.close();

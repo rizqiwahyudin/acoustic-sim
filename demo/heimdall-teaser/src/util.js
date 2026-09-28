@@ -21,7 +21,9 @@ export function hash(...keys) {
   return (h >>> 0) / 4294967296;
 }
 
-// One cold wire colour, one signal colour.
-export const WIRE = [0.78, 0.88, 1.0];
-export const SIGNAL = [1.0, 0.36, 0.07];
+// Muted neon: ice-cyan structure, violet and magenta for sound, orange-red only for the target.
+export const WIRE = [0.5, 0.86, 1.0];
+export const VIOLET = [0.6, 0.46, 1.0];
+export const MAGENTA = [1.0, 0.34, 0.72];
+export const SIGNAL = [1.0, 0.4, 0.12];
 export const FONT = { serif: '"Shippori Mincho B1"', mono: '"IBM Plex Mono"' };
