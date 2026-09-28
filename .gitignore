@@ -26,3 +26,6 @@ Thumbs.db
 
 # Byte-compiled / optimized
 *.so
+
+# Reveal video render output
+demo/heimdall-reveal/out/
