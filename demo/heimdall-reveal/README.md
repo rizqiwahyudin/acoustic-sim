@@ -16,16 +16,16 @@ install), and the repository Python environment plus `imageio-ffmpeg`
 ```powershell
 .\.venv\Scripts\python.exe -m pip install imageio-ffmpeg
 cd app; npm.cmd ci; cd ..          # three.js is loaded from app/node_modules
-node demo\heimdall-reveal\render.cjs
+node demo\render.cjs
 ```
 
 Output: `demo/heimdall-reveal/out/heimdall-reveal.mp4` (plus the generated
 `soundtrack.wav` and `events.json`). Other modes:
 
 ```powershell
-node demo\heimdall-reveal\render.cjs --stills 2.4,9.6,16   # PNG stills in out/stills
-node demo\heimdall-reveal\render.cjs --fps 10 --out preview.mp4
-node demo\heimdall-reveal\render.cjs --gpu                  # use the real GPU instead of SwiftShader
+node demo\render.cjs --stills 2.4,9.6,16   # PNG stills in out/stills
+node demo\render.cjs --fps 10 --out preview.mp4
+node demo\render.cjs --gpu                  # use the real GPU instead of SwiftShader
 ```
 
 To scrub interactively, serve the repository root (for example
@@ -61,13 +61,13 @@ The end card labels the clip "simulated scenario".
 ## Files
 
 - `build_assets.py` – exports `assets/array.json` and `assets/spectra.json`
-- `fetch_fonts.py` – downloads the OFL Google Fonts, subset to the text in `src/`
-  (re-run after adding new Japanese text)
+- `fonts.json` – font families for `python demo/fetch_fonts.py demo/heimdall-reveal`, which downloads
+  the OFL Google Fonts subset to the text in `src/` (re-run after adding new Japanese text)
 - `src/story.js` – timeline, scripted sources, sweep/track scheduling, log, sound cues
 - `src/stage.js` – three.js array, electronics pod, floor, sector dome, cameras
 - `src/hud.js` – title cards, overlays, console, alert cards, film post-processing
 - `soundtrack.py` – synthesises the soundtrack from the scene's cue list
-- `render.cjs` – static server + headless Chromium frame capture + ffmpeg encode
+- `../render.cjs` – shared static server + headless Chromium frame capture + ffmpeg encode
 
 ## Timeline
 

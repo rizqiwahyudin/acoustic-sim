@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>HEIMDALL Teaser</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  #out { display: block; width: 1920px; height: 1080px; }
+  #gl { position: absolute; left: -4000px; top: 0; width: 1920px; height: 1080px; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "../../app/node_modules/three/build/three.module.js",
+    "three/addons/": "../../app/node_modules/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="out" width="1920" height="1080"></canvas>
+<canvas id="gl"></canvas>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

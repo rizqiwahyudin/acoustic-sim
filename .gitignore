@@ -28,4 +28,4 @@ Thumbs.db
 *.so
 
 # Reveal video render output
-demo/heimdall-reveal/out/
+demo/*/out/
