@@ -1,7 +1,12 @@
 # HEIMDALL teaser
 
-A 30-second, 1080p30 teaser: slow, wireframe and mostly dark, framed 2.39:1
+A 45-second, 1080p30 teaser: slow, wireframe and mostly dark, framed 2.39:1
 inside 16:9. Rendered from code one frame at a time, like the reveal video.
+
+The scene is written against a 30-second story clock (`T` and the camera keys in
+`src/scene.js`). `PACE` maps wall-clock time onto it, so the tempo of each
+section can be changed there without touching the choreography. Rain, rotor
+spin and film grain run on the wall clock.
 
 ## Render
 
@@ -16,19 +21,19 @@ node demo\render.cjs --scene demo\heimdall-teaser --audio           # out/soundt
 
 Output: `demo/heimdall-teaser/out/heimdall-teaser.mp4`. For a single frame in a
 browser, serve the repository root and open
-`/demo/heimdall-teaser/index.html?t=20.6`.
+`/demo/heimdall-teaser/index.html?t=34` (wall-clock seconds).
 
 ## Shots
 
-| Time | Shot |
+| Time (approx.) | Shot |
 | --- | --- |
-| 0.0-4.6 s | Black. Rain. Epigraph from the Prose Edda |
-| 4.6-9.0 s | A valley of ridgelines, a watchman, the array on its mast. "every sound has a direction." |
-| 9.0-12.6 s | Sparks rise from the valley into the microphones, centre first. LISTEN |
-| 12.6-15.6 s | A plane wavefront falls from the sky and crosses the board in delay order; a hex ripple |
-| 15.6-18.4 s | The channels converge into one beam; through the array into its 6x6 sector dome; a sector locks. LOCK |
-| 18.4-23.8 s | Up the beam to the drone. Its spectrum unrolls behind it as a second valley. DRONE, 97.8% |
-| 24.2-30.0 s | HEIMDALL / acoustic drone detection |
+| 0-6 s | Black. Rain. Epigraph from the Prose Edda |
+| 6-13 s | A valley of ridgelines, a watchman, the array on its mast. "every sound has a direction." |
+| 13-19 s | Sparks rise from the valley into the microphones, centre first. LISTEN |
+| 19-24 s | A plane wavefront falls from the sky and crosses the board in delay order; a hex ripple |
+| 24-29.5 s | The channels converge into one beam; through the array into its 6x6 sector dome; a sector locks. LOCK |
+| 29.5-38.5 s | Up the beam to the drone. Its spectrum unrolls behind it as a second valley. DRONE, 97.8% |
+| 39-45 s | HEIMDALL / acoustic drone detection |
 
 ## What is real and what is illustrative
 
@@ -43,7 +48,7 @@ browser, serve the repository root and open
 
 ## Files
 
-- `src/scene.js` – timeline, camera path, the three.js world and the sound cue list
+- `src/scene.js` – story timeline, pacing, camera path, the three.js world and the sound cue list
 - `src/overlay.js` – epigraph, letterbox, section cards, reticle, title, grain and vignette
 - `soundtrack.py` – ambient score synthesised from the cue list
 - `fonts.json` – families for `python demo/fetch_fonts.py demo/heimdall-teaser`

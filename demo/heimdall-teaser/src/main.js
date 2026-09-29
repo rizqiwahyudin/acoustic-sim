@@ -1,4 +1,4 @@
-import { Teaser, T, DURATION } from './scene.js';
+import { Teaser, T, DURATION, storyTime, wallTime } from './scene.js';
 import { Overlay } from './overlay.js';
 import { W, H } from './util.js';
 
@@ -18,13 +18,15 @@ window.teaser = teaser;   // handy for debugging from the console
 const ctx = document.getElementById('out').getContext('2d');
 const overlay = new Overlay(ctx, teaser);
 
-window.renderFrame = (t) => {
+// Frames and sound cues are in wall-clock time; the scene is written in story time.
+window.renderFrame = (wall) => {
+  const t = storyTime(wall);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
   if (t >= T.fadeIn - 0.05 && t < T.black + 0.05) {
     teaser.setCamera(teaser.pathCamera(t));
-    teaser.update(t);
+    teaser.update(t, wall);
     teaser.render();
     ctx.drawImage(teaser.canvas, 0, 0, W, H);
   } else {
@@ -32,10 +34,12 @@ window.renderFrame = (t) => {
     ctx.fillRect(0, 0, W, H);
   }
   overlay.draw(t);
-  overlay.post(t);
+  overlay.post(t, wall);
   return 'teaser';
 };
-window.audioEvents = () => teaser.audioEvents();
+window.audioEvents = () => teaser.audioEvents().map((e) => ({
+  ...e, t: +wallTime(e.t).toFixed(4), ...(e.t1 !== undefined && { t1: +wallTime(e.t1).toFixed(4) }),
+}));
 window.DURATION = DURATION;
 window.revealReady = true;
 

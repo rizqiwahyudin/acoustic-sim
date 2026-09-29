@@ -1,5 +1,5 @@
 /** Epigraph, letterbox, section cards, the drone reticle, the title and film finish. */
-import { T, DURATION } from './scene.js';
+import { T } from './scene.js';
 import { W, H, FONT, clamp, lerp, range01, smooth, easeOut, window01, hash } from './util.js';
 
 const BAR = Math.round((H - W / 2.39) / 2);   // 2.39:1 letterbox
@@ -154,7 +154,7 @@ export class Overlay {
 
   title(t) {
     if (t < T.title) return;
-    const out = 1 - smooth(range01(t, DURATION - 0.7, DURATION));
+    const out = 1 - smooth(range01(t, T.end - 0.7, T.end));
     const word = 'HEIMDALL';
     const style = { font: FONT.serif, weight: 500, size: 116, spacing: 0 };
     const gap = 54;
@@ -175,9 +175,10 @@ export class Overlay {
     this.text('every sound has a direction.', W / 2, H - BAR + 64, { size: 15, spacing: 9, align: 'center', alpha: tag * 0.5 });
   }
 
-  post(t) {
+  /** t is story time; wall is clock time, which drives the grain and the timecode. */
+  post(t, wall = t) {
     const ctx = this.ctx;
-    const frame = Math.round(t * 30);
+    const frame = Math.round(wall * 30);
     ctx.save();
     ctx.globalCompositeOperation = 'overlay';
     ctx.globalAlpha = 0.1;
@@ -204,7 +205,7 @@ export class Overlay {
     this.title(t);
     const hud = 0.24 * window01(t, T.fadeIn + 0.5, T.fadeIn + 1.5, T.fadeOut, T.black);
     if (hud > 0) {
-      const frames = Math.round(t * 30);
+      const frames = Math.round(wall * 30);
       this.text(`${String(Math.floor(frames / 30)).padStart(2, '0')}:${String(frames % 30).padStart(2, '0')}`, W - 90, H - BAR / 2 + 5, { size: 12, spacing: 5, align: 'right', alpha: hud * 1.6 });
       this.text('44CH  ·  48 kHz  ·  1–4 kHz', 90, H - BAR / 2 + 5, { size: 12, spacing: 5, alpha: hud * 1.6 });
     }

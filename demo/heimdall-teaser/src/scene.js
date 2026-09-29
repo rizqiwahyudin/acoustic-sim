@@ -22,7 +22,42 @@ import {
   W, H, clamp, lerp, range01, smooth, easeInOut, easeOut, window01, hash, WIRE, VIOLET, MAGENTA, SIGNAL,
 } from './util.js';
 
-export const DURATION = 30;
+// The story (T and the camera keys) is blocked out in 30 s of story time. PACE maps
+// wall-clock seconds to story seconds so it plays slower on screen: most of all
+// through the lock and the climb to the drone, while the title keeps its tempo.
+const STORY = 30;
+const PACE = [[0, 0], [6.0, 4.6], [16.0, 10.6], [23.0, 15.0], [27.8, 17.4], [32.4, 20.0], [38.4, 23.8], [39.0, 24.2], [45.0, STORY]];
+export const DURATION = PACE.at(-1)[0];
+
+// Monotone cubic (Fritsch-Butland) slopes, so playback speed never jumps.
+const PACE_SLOPES = PACE.map(([x, y], k) => {
+  const secant = (i) => (PACE[i + 1][1] - PACE[i][1]) / (PACE[i + 1][0] - PACE[i][0]);
+  if (k === 0) return secant(0);
+  if (k === PACE.length - 1) return secant(k - 1);
+  const h0 = x - PACE[k - 1][0]; const h1 = PACE[k + 1][0] - x; const d0 = secant(k - 1); const d1 = secant(k);
+  return d0 * d1 <= 0 ? 0 : (3 * (h0 + h1)) / ((2 * h1 + h0) / d0 + (h1 + 2 * h0) / d1);
+});
+
+/** Story time shown at wall-clock time t. */
+export function storyTime(t) {
+  const x = clamp(t, 0, DURATION);
+  let k = 0;
+  while (k < PACE.length - 2 && x > PACE[k + 1][0]) k++;
+  const [x0, y0] = PACE[k]; const [x1, y1] = PACE[k + 1]; const h = x1 - x0; const s = (x - x0) / h;
+  return (2 * s ** 3 - 3 * s ** 2 + 1) * y0 + (s ** 3 - 2 * s ** 2 + s) * h * PACE_SLOPES[k]
+    + (-2 * s ** 3 + 3 * s ** 2) * y1 + (s ** 3 - s ** 2) * h * PACE_SLOPES[k + 1];
+}
+
+/** Wall-clock time at which story time s is shown. */
+export function wallTime(s) {
+  let lo = 0; let hi = DURATION;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (storyTime(mid) < s) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
 export const T = {
   epigraph: 0.5, epigraphOut: 4.4,
   fadeIn: 4.6, subtitle: 6.2, subtitleOut: 9.2,
@@ -33,7 +68,7 @@ export const T = {
   capture: 16.6, captureOut: 18.4,
   ascend: 17.4, drone: 19.2, print: 20.0, label: 20.8,
   fadeOut: 23.0, black: 23.8,
-  title: 24.2, end: DURATION,
+  title: 24.2, end: STORY,
 };
 export const SOURCE = { az: 30, el: 20 };
 export const ARRAY_POS = new THREE.Vector3(0, 2.3, -12);
@@ -470,16 +505,17 @@ export class Teaser {
   }
 
   // ── Frame update ─────────────────────────────────────────────────────────
-  update(t) {
+  /** t is story time; wall is clock time, for things with a physical rate (rain, rotors). */
+  update(t, wall = t) {
     this.halo.material.color.setRGB(0.06, 0.13, 0.19);
-    this.updateRain(t);
+    this.updateRain(wall);
     this.updateLand(t);
     this.updateArray(t);
     this.updateParticles(t);
     this.updateWave(t);
     this.updateBeam(t);
     this.updateDome(t);
-    this.updateDrone(t);
+    this.updateDrone(t, wall);
   }
 
   updateRain(t) {
@@ -695,7 +731,7 @@ export class Teaser {
     dome.end(); cursor.end();
   }
 
-  updateDrone(t) {
+  updateDrone(t, wall) {
     const wires = this.droneWires.begin();
     const vis = smooth(range01(t, T.drone, T.drone + 0.9)) * (1 - smooth(range01(t, T.fadeOut, T.black)));
     this.drone.visible = vis > 0.002;
@@ -715,7 +751,7 @@ export class Teaser {
           return local(sx * 0.085 + 0.055 * Math.cos(a), 0.012, sz * 0.085 + 0.055 * Math.sin(a));
         });
         wires.polyline(ring, () => scale(WIRE, 0.85 * vis), true);
-        const spin = t * 37 + sx * 1.3 + sz * 0.7;
+        const spin = wall * 37 + sx * 1.3 + sz * 0.7;
         wires.seg(local(sx * 0.085 + 0.05 * Math.cos(spin), 0.012, sz * 0.085 + 0.05 * Math.sin(spin)),
           local(sx * 0.085 - 0.05 * Math.cos(spin), 0.012, sz * 0.085 - 0.05 * Math.sin(spin)), scale(WIRE, 0.55 * vis));
       }
