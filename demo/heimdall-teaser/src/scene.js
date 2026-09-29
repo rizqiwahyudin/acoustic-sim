@@ -25,9 +25,12 @@ import {
 // The story (T and the camera keys) is blocked out in 30 s of story time. PACE maps
 // wall-clock seconds to story seconds so it plays slower on screen: most of all
 // through the lock and the climb to the drone, while the title keeps its tempo.
+// The first knot is the black intro that carries the epigraph (see overlay.js).
 const STORY = 30;
-const PACE = [[0, 0], [6.0, 4.6], [16.0, 10.6], [23.0, 15.0], [27.8, 17.4], [32.4, 20.0], [38.4, 23.8], [39.0, 24.2], [45.0, STORY]];
+const PACE = [[0, 0], [11.0, 4.6], [21.0, 10.6], [28.0, 15.0], [32.8, 17.4], [37.4, 20.0], [43.4, 23.8], [44.0, 24.2], [50.0, STORY]];
 export const DURATION = PACE.at(-1)[0];
+/** Wall-clock seconds of black before the world fades in. */
+export const INTRO = PACE[1][0];
 
 // Monotone cubic (Fritsch-Butland) slopes, so playback speed never jumps.
 const PACE_SLOPES = PACE.map(([x, y], k) => {
@@ -59,7 +62,6 @@ export function wallTime(s) {
 }
 
 export const T = {
-  epigraph: 0.5, epigraphOut: 4.4,
   fadeIn: 4.6, subtitle: 6.2, subtitleOut: 9.2,
   frameDraw: 8.8, ignite: 9.0,
   listen: 10.6, listenOut: 12.6,

@@ -2,8 +2,8 @@
 
     python demo/heimdall-teaser/soundtrack.py out/events.json out/soundtrack.wav
 
-Slow and quiet: a drifting D-minor pad under rain, a glass pluck as each
-microphone wakes, bell tones for the hex ripple, one low hit on the lock, a
+Slow and quiet: a distant horn under the epigraph, a drifting D-minor pad under
+rain, a glass pluck as each microphone wakes, bell tones for the hex ripple, one low hit on the lock, a
 heartbeat under the drone and the repository's own audio/drone.wav recording,
 heard from far away. Everything shares one long hall reverb.
 """
@@ -276,6 +276,22 @@ def boom() -> np.ndarray:
     return np.tanh(1.4 * (low + body))
 
 
+def horn(duration: float) -> np.ndarray:
+    """The Gjallar-Horn, very far off: one low D that swells open and dies into the hall."""
+    t = seconds(duration)
+    out = np.zeros_like(t)
+    for f, level in ((D2, 1.0), (D3, 0.35), (A2, 0.2)):
+        for cents in (-4.0, 4.0):
+            bend = f * 2 ** (cents / 1200) * (1 - 0.025 * np.exp(-t / 0.35))   # a horn starts a little flat
+            p = np.cumsum(bend) / SR + rng.random()
+            out += level * 2 * (p - np.floor(p + 0.5))
+    k = t / duration
+    opening = np.sin(np.pi * np.clip(k / 0.7, 0, 1)) ** 1.5
+    tone = band(out, None, 320, 4) * (1 - opening) + band(out, None, 1300, 2) * opening * 0.7
+    breath = band(rng.standard_normal(t.size), 250, 1500, 2) * envelope(t, 0.4, 0.9) * 0.12
+    return (tone / 3 + breath) * ramp(t, 0, 1.6) * (1 - ramp(t, duration - 2.4, duration))
+
+
 # ── Score ────────────────────────────────────────────────────────────────────
 
 def main(events_path: str, out_path: str) -> None:
@@ -328,6 +344,8 @@ def main(events_path: str, out_path: str) -> None:
             mix.add(chime(), at, 0.06, pan=-0.2, send=0.8)
         elif kind == "boom":
             mix.add(boom(), at, 0.6, send=0.5)
+        elif kind == "horn":
+            mix.add(horn(until - at), at, 0.4, send=0.85)
 
     out = mix.render()
     t = np.arange(mix.n) / SR

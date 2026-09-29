@@ -1,11 +1,19 @@
 /** Epigraph, letterbox, section cards, the drone reticle, the title and film finish. */
-import { T } from './scene.js';
+import { T, INTRO } from './scene.js';
 import { W, H, FONT, clamp, lerp, range01, smooth, easeOut, window01, hash } from './util.js';
 
 const BAR = Math.round((H - W / 2.39) / 2);   // 2.39:1 letterbox
 const ICE = 'rgba(214,236,255,1)';
 const CYAN = 'rgba(128,218,255,1)';
 const EMBER = 'rgba(255,112,44,1)';
+
+// Two epigraph cards over black, in wall-clock seconds, from Snorri's Gylfaginning
+// (A. G. Brodeur's 1916 translation, chapters XXVII and LI).
+export const EPIGRAPH = {
+  watch: { in: 0.8, out: 4.6 },
+  horn: { in: 5.2, out: INTRO - 0.3 },
+  hornSound: { t: 5.9, t1: INTRO + 0.4 },   // a distant horn under "the Gjallar-Horn"
+};
 
 export class Overlay {
   constructor(ctx, teaser) {
@@ -79,13 +87,19 @@ export class Overlay {
     this.reticle(t);
   }
 
-  epigraph(t) {
-    const out = 1 - smooth(range01(t, T.epigraphOut - 0.6, T.epigraphOut));
-    if (t > T.epigraphOut) return;
-    const serif = { font: FONT.serif, weight: 400, size: 40, spacing: 3, align: 'center' };
-    this.text('He hears the grass grow on the earth,', W / 2, 470, { ...serif, alpha: smooth(range01(t, 0.5, 1.5)) * out });
-    this.text('and the wool on the sheep.', W / 2, 530, { ...serif, alpha: smooth(range01(t, 1.4, 2.4)) * out });
-    this.text('— after the Prose Edda', W / 2, 618, { size: 15, spacing: 7, align: 'center', alpha: 0.55 * smooth(range01(t, 2.6, 3.2)) * out });
+  /** The epigraph runs on the wall clock: it lives on black, before the story starts. */
+  epigraph(wall) {
+    const serif = { font: FONT.serif, weight: 400, spacing: 3, align: 'center' };
+    const { watch, horn } = EPIGRAPH;
+    const a = window01(wall, watch.in, watch.in + 1.4, watch.out - 0.9, watch.out);
+    if (a > 0) this.text('He needs less sleep than a bird.', W / 2, 558, { ...serif, size: 62, alpha: a });
+    const out = 1 - smooth(range01(wall, horn.out - 0.9, horn.out));
+    if (wall < horn.in || out <= 0) return;
+    const line = (str, y, t0) => this.text(str, W / 2, y, { ...serif, size: 54, alpha: smooth(range01(wall, t0, t0 + 1.3)) * out });
+    line('Then shall Heimdallr rise up', 456, horn.in);
+    line('and blow mightily in the Gjallar-Horn,', 536, horn.in + 0.7);
+    line('and awaken all the gods.', 616, horn.in + 1.4);
+    this.text('— THE PROSE EDDA', W / 2, 712, { size: 18, spacing: 9, align: 'center', alpha: 0.55 * smooth(range01(wall, horn.in + 2.6, horn.in + 3.4)) * out });
   }
 
   subtitle(t) {
@@ -200,7 +214,7 @@ export class Overlay {
     // Letterbox, then the type that lives on black.
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, BAR); ctx.fillRect(0, H - BAR, W, BAR);
-    this.epigraph(t);
+    this.epigraph(wall);
     this.subtitle(t);
     this.title(t);
     const hud = 0.24 * window01(t, T.fadeIn + 0.5, T.fadeIn + 1.5, T.fadeOut, T.black);
