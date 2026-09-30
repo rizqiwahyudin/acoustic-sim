@@ -1,0 +1,41 @@
+/* Design tokens. Style A ("instrument") is the default; style D
+   ("exhibition") re-maps the same names inside .theme-exhibit. */
+
+:root {
+  --bg: #131417;
+  --surface: #1a1c20;
+  --raised: #2a2e34;
+  --line: #2c3036;
+  --text: #e9eaec;
+  --muted: #a3a9b0;
+  --subtle: #878d94;
+  --accent: #7aa7ff;
+  --on-accent: #0f1115;
+  --ok: #4cc38a;
+  --danger: #ef6b62;
+  --warn: #e2b454;
+  --series-2: #e39b5a;
+
+  --font-sans: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', monospace;
+  --font-display: 'Archivo', 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --gutter: 24px;
+  --header-h: 56px;
+
+  color-scheme: dark;
+}
+
+.theme-exhibit {
+  --bg: #08090b;
+  --surface: #111317;
+  --raised: #1d2026;
+  --line: #22262d;
+  --text: #f2f2f0;
+  --muted: #9da3ab;
+  --subtle: #7d838b;
+  --accent: #ff5a36;
+  --on-accent: #120604;
+}
