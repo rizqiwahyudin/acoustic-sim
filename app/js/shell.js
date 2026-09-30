@@ -46,7 +46,7 @@ async function show({route, preset}) {
     const section = h('section', {class: `view view--${route}`, id: `view-${route}`, 'aria-label': route});
     container.append(section);
     const module = await ROUTES[route]();
-    views.set(route, {section, view: module.createView(section, {session, navigate, preset})});
+    views.set(route, {section, view: module.createView(section, {session, navigate, preset}), presetSeen: preset});
   }
   if (current && current !== route) {
     const previous = views.get(current);
@@ -56,6 +56,10 @@ async function show({route, preset}) {
   current = route;
   const entry = views.get(route);
   entry.section.hidden = false;
+  if (preset && entry.view.applyPreset && views.has(route) && entry.presetSeen !== preset) {
+    entry.presetSeen = preset;
+    entry.view.applyPreset(preset);
+  }
   document.body.classList.toggle('is-exhibit', route === 'exhibit');
   for (const link of document.querySelectorAll('#appNav a')) {
     if (link.dataset.route === route) link.setAttribute('aria-current', 'page');
