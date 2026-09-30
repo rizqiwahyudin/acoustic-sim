@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from heimdall_transport import EmulatorHeimdallTransport, SerialHeimdallTransport
+from dsp_registry import DspParameterService, plan_writes
 from heimdall_acoustic import (
     AcousticCacheLevelProvider,
     AcousticGridSpec,
@@ -1158,6 +1159,88 @@ def _array_layout():
             layout = None
         _ARRAY_LAYOUT_CACHE["layout"] = layout
     return _ARRAY_LAYOUT_CACHE["layout"]
+
+
+# ── Study: DSP parameters (register map from the SigmaStudio export) ─────────
+
+_dsp_service = DspParameterService()
+
+
+class DspWrite(BaseModel):
+    address: int
+    word: int
+
+
+class DspWriteRequest(BaseModel):
+    writes: list[DspWrite]
+
+
+class DspReadRequest(BaseModel):
+    address: int
+    count: int = 1
+
+
+class DspSetRequest(BaseModel):
+    key: str
+    value: float
+
+
+def _current_transport():
+    with _heimdall_transport_lock:
+        return _heimdall_transport
+
+
+@app.get("/dsp/registry")
+def dsp_registry():
+    try:
+        return _dsp_service.registry()
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/dsp/status")
+def dsp_status():
+    return _dsp_service.status(_current_transport())
+
+
+@app.post("/dsp/plan")
+def dsp_plan(request: DspWriteRequest):
+    try:
+        return plan_writes([write.model_dump() for write in request.writes], _dsp_service.registry())
+    except (ValueError, FileNotFoundError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _dsp_call(action):
+    try:
+        return action()
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=423, detail=str(error)) from error
+    except (ValueError, FileNotFoundError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/dsp/memory")
+def dsp_memory():
+    return _dsp_call(lambda: {"words": {str(k): v for k, v in _dsp_service.memory(_current_transport()).items()}})
+
+
+@app.post("/dsp/read")
+def dsp_read(request: DspReadRequest):
+    return _dsp_call(lambda: {"address": request.address,
+                              "words": _dsp_service.read(_current_transport(), request.address, request.count)})
+
+
+@app.post("/dsp/write")
+def dsp_write(request: DspWriteRequest):
+    return _dsp_call(lambda: _dsp_service.write(_current_transport(), [w.model_dump() for w in request.writes]))
+
+
+@app.post("/dsp/set")
+def dsp_set(request: DspSetRequest):
+    return _dsp_call(lambda: {"settings": _dsp_service.set(_current_transport(), request.key, request.value)})
 
 
 @app.get("/hw_recording.wav")
