@@ -7,6 +7,8 @@ export const RAMPS = {
   inferno: [[0, '#1b0f36'], [0.25, '#57106e'], [0.5, '#bc3754'], [0.75, '#f98c0a'], [1, '#fcffa4']],
   cividis: [[0, '#0b2350'], [0.25, '#3b496c'], [0.5, '#707173'], [0.75, '#aea06f'], [1, '#fde737']],
   blue: [[0, '#18202c'], [0.5, '#2f65b0'], [1, '#d6e7ff']],
+  // Exhibition (style D): dark to ember to warm white.
+  ember: [[0, '#16171b'], [0.35, '#4a1f1a'], [0.6, '#b8351f'], [0.82, '#ff7a45'], [1, '#ffe3c2']],
 };
 
 const parsed = {};

@@ -25,14 +25,19 @@ export const CAMERA_VIEWS = {
   side: {yaw: 78, pitch: 8},
 };
 
-const COLORS = {
-  line: new THREE.Color('#2c3036'),
-  surface: new THREE.Color('#1a1c20'),
-  text: new THREE.Color('#e9eaec'),
-  accent: new THREE.Color('#7aa7ff'),
-  ok: new THREE.Color('#4cc38a'),
-  warn: new THREE.Color('#e2b454'),
+const THEMES = {
+  instrument: {
+    background: '#1a1c20', ramp: 'inferno', line: '#2c3036', text: '#e9eaec', accent: '#7aa7ff',
+    labels: true, trail: false, ring: false, fov: 40, micSize: 0.011, floor: {half: 1.2, depth: [-0.3, 1.5], y: -0.9},
+  },
+  exhibit: {
+    background: '#08090b', ramp: 'ember', line: '#1a1d21', text: '#f4f4f2', accent: '#ff5a36',
+    labels: false, trail: true, ring: true, fov: 52, micSize: 0.014, floor: {half: 1.6, depth: [-0.4, 1.6], y: -0.95},
+  },
 };
+
+const OK = new THREE.Color('#4cc38a');
+const WARN = new THREE.Color('#e2b454');
 
 function toScene(vec, radius = 1) {
   return new THREE.Vector3(-vec[0] * radius, vec[1] * radius, vec[2] * radius);
@@ -76,11 +81,17 @@ function outlinePoints(a0, a1, e0, e1, radius, steps = 8) {
 }
 
 export class SectorScene {
-  constructor(container, {onPick, onHover} = {}) {
+  constructor(container, {onPick, onHover, theme = 'instrument'} = {}) {
     this.container = container;
     this.onPick = onPick;
     this.onHover = onHover;
-    this.viewport = new Viewport3D(container, {background: '#1a1c20'});
+    this.theme = THEMES[theme] || THEMES.instrument;
+    this.colors = {
+      line: new THREE.Color(this.theme.line),
+      text: new THREE.Color(this.theme.text),
+      accent: new THREE.Color(this.theme.accent),
+    };
+    this.viewport = new Viewport3D(container, {background: this.theme.background, fov: this.theme.fov});
     this.labels = h('div', {class: 'scene-labels', 'aria-hidden': 'true'});
     container.append(this.labels);
 
@@ -113,17 +124,23 @@ export class SectorScene {
     this.viewport.orbitTo(TARGET, {...view, distance: DISTANCE});
   }
 
+  setOrbit(yaw, pitch, distance = DISTANCE) {
+    this.viewport.orbitTo(TARGET, {yaw, pitch, distance});
+  }
+
   buildFloor() {
+    const {half, depth: [near, far], y} = this.theme.floor;
     const points = [];
-    for (let i = 0; i <= 6; i++) {
-      const x = -1.2 + i * 0.4;
-      points.push(new THREE.Vector3(x, -0.9, -0.3), new THREE.Vector3(x, -0.9, 1.5));
-      const z = -0.3 + i * 0.3;
-      points.push(new THREE.Vector3(-1.2, -0.9, z), new THREE.Vector3(1.2, -0.9, z));
+    const steps = Math.round(half / 0.2);
+    for (let i = 0; i <= steps; i++) {
+      const x = -half + i * (2 * half / steps);
+      points.push(new THREE.Vector3(x, y, near), new THREE.Vector3(x, y, far));
+      const z = near + i * ((far - near) / steps);
+      points.push(new THREE.Vector3(-half, y, z), new THREE.Vector3(half, y, z));
     }
     this.floor.add(new THREE.LineSegments(
       new THREE.BufferGeometry().setFromPoints(points),
-      new THREE.LineBasicMaterial({color: COLORS.line}),
+      new THREE.LineBasicMaterial({color: this.colors.line}),
     ));
   }
 
@@ -137,8 +154,8 @@ export class SectorScene {
     const mean = [0, 0];
     for (const [x, y] of layout.positions) { mean[0] += x / n; mean[1] += y / n; }
     const mesh = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.011, 10, 8),
-      new THREE.MeshBasicMaterial({color: COLORS.text, transparent: true, opacity: 0.85}),
+      new THREE.SphereGeometry(this.theme.micSize, 10, 8),
+      new THREE.MeshBasicMaterial({color: this.colors.text, transparent: true, opacity: 0.85}),
       n,
     );
     const matrix = new THREE.Matrix4();
@@ -166,7 +183,7 @@ export class SectorScene {
       for (let column = 0; column < cfg.columns; column++) {
         const mesh = new THREE.Mesh(
           tileGeometry(az[column] + inset, az[column + 1] - inset, el[row] + inset, el[row + 1] - inset, RADIUS),
-          new THREE.MeshBasicMaterial({color: COLORS.surface, transparent: true, opacity: 0.95, side: THREE.DoubleSide}),
+          new THREE.MeshBasicMaterial({color: this.colors.line, transparent: true, opacity: 0.95, side: THREE.DoubleSide}),
         );
         mesh.userData = {row, column, sector: row * cfg.columns + column};
         this.tiles.add(mesh);
@@ -177,6 +194,7 @@ export class SectorScene {
   }
 
   buildTickLabels() {
+    if (!this.theme.labels) return;
     const {az, el} = this.edges;
     this.labelNodes.forEach((node) => node.el.remove());
     this.labelNodes = [];
@@ -223,8 +241,8 @@ export class SectorScene {
       const measured = Number.isFinite(level);
       const age = session.cellAge(row, column);
       const fresh = measured && Number.isFinite(age) && age <= STALE_MS;
-      mesh.material.color.copy(measured ? srgb(rampColor(levelToUnit(level, floor))) : COLORS.line);
-      mesh.material.opacity = measured ? (fresh ? 0.95 : 0.4) : 0.35;
+      mesh.material.color.copy(measured ? srgb(rampColor(levelToUnit(level, floor), this.theme.ramp)) : this.colors.line);
+      mesh.material.opacity = measured ? (fresh ? 0.96 : 0.38) : 0.35;
     }
 
     clearGroup(this.highlights);
@@ -247,9 +265,9 @@ export class SectorScene {
     const marker = target || steer || strongest;
     if (this.hover !== null) {
       const {row, column} = this.tileMeshes[this.hover]?.userData || {};
-      if (row !== undefined) outline(row, column, COLORS.text);
+      if (row !== undefined) outline(row, column, this.colors.text);
     }
-    if (steer) outline(steer.row, steer.column, COLORS.accent, true);
+    if (steer) outline(steer.row, steer.column, this.colors.accent, true);
     if (marker) {
       const a = frame.azimuth_deg[marker.column];
       const e = frame.elevation_deg[marker.row];
@@ -257,13 +275,19 @@ export class SectorScene {
       if (!steer) outline(marker.row, marker.column, new THREE.Color('#ffffff'));
       const bearing = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), tip]),
-        new THREE.LineDashedMaterial({color: steer ? COLORS.accent : COLORS.text, dashSize: 0.06, gapSize: 0.06}),
+        new THREE.LineDashedMaterial({color: steer ? this.colors.accent : this.colors.text, dashSize: 0.06, gapSize: 0.06}),
       );
       bearing.computeLineDistances();
       this.pointer.add(bearing);
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.022, 16, 12), new THREE.MeshBasicMaterial({color: 0xffffff}));
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(this.theme.ring ? 0.018 : 0.022, 16, 12), new THREE.MeshBasicMaterial({color: 0xffffff}));
       dot.position.copy(tip);
       this.pointer.add(dot);
+      if (this.theme.ring) {
+        const ring = new THREE.Mesh(new THREE.RingGeometry(0.05, 0.062, 40), new THREE.MeshBasicMaterial({color: 0xffffff, side: THREE.DoubleSide}));
+        ring.position.copy(tip);
+        ring.lookAt(0, 0, 0);
+        this.pointer.add(ring);
+      }
       this.markerPoint = tip;
       if (this.markerLabel) {
         this.markerLabel.hidden = false;
@@ -276,7 +300,7 @@ export class SectorScene {
 
     const truth = frame.emulator_truth;
     if (truth) {
-      const color = truth.source_active === false ? COLORS.warn : COLORS.ok;
+      const color = truth.source_active === false ? WARN : OK;
       const point = toScene(direction(truth.azimuth_deg, truth.elevation_deg), RADIUS * 1.06);
       const line = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), point]),
@@ -286,7 +310,24 @@ export class SectorScene {
       dot.position.copy(point);
       this.pointer.add(line, dot);
     }
+    if (this.theme.trail) this.drawTrail(session, frame);
     this.viewport.requestRender();
+  }
+
+  /** Where the answer has been over the last 15 s, as a tube on the sphere. */
+  drawTrail(session, frame) {
+    const latest = Number.isFinite(frame.timestamp_s) ? frame.timestamp_s : Date.now() / 1000;
+    const points = session.history
+      .filter((item) => latest - item.t <= 15 && Number.isFinite(item.azimuth) && Number.isFinite(item.elevation))
+      .map((item) => toScene(direction(item.azimuth, item.elevation), RADIUS * 1.02));
+    const unique = points.filter((p, i) => i === 0 || p.distanceTo(points[i - 1]) > 1e-4);
+    if (unique.length < 2) return;
+    const curve = new THREE.CatmullRomCurve3(unique, false, 'centripetal');
+    const tube = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, Math.min(400, unique.length * 6), 0.008, 6, false),
+      new THREE.MeshBasicMaterial({color: this.colors.accent, transparent: true, opacity: 0.55}),
+    );
+    this.pointer.add(tube);
   }
 
   bindPointer() {
