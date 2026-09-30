@@ -256,6 +256,35 @@ To test a layout on real hardware, generate `beam_table_2d.h` in the sibling
 a clean build, flash it, and reconnect. The firmware `I` response makes the GUI
 adopt the new rows, columns, and center angles automatically.
 
+## Study
+
+`#study` is for characterising the array without reflashing. It has two parts.
+
+**Parameters.** The backend parses the SigmaStudio export
+(`../MAX78002/SigmaStudioExport/*.json`, or the file in `HEIMDALL_DSP_EXPORT`)
+into a register map (`dsp_registry.py`, schema `heimdall-dsp-registry-v1`) and
+serves it at `/dsp/registry`. The screen lists every block, and its editors
+stage words for a gain taper and per-microphone mutes, FIR presets, the level
+detector (time constant, hold, decay) and single raw words; the firmware settle
+time is a separate `SET` setting. Nothing is written until `Apply`, which needs
+the `Enable writes` switch and an idle device. The planner batches only
+addresses that are really consecutive (at most five words per safeload
+command); SigmaStudio does not guarantee that blocks of one kind are contiguous.
+History (with Revert) lives in the session; snapshots stay in the browser. While
+the device differs from the flashed program, Hardware shows a banner.
+
+**Measurements.** Guided procedures that hold a beam and poll `M`: SNR (source
+on/off), main-lobe width by moving the source, a detector scale check, dynamic
+range and a detection-range estimate. They use only existing commands. Runs are
+kept in the browser and export as CSV with the device, register-map hash and
+settings.
+
+**Device support.** The emulators implement the proposed parameter commands
+through `/dsp/write`, `/dsp/read`, `/dsp/memory` and `/dsp/set` (their levels do
+not react to the parameters yet). Serial hardware is reported as unsupported
+until the firmware implements protocol v3; the proposal is in
+`docs/study-protocol.md`.
+
 ## Tests
 
 ```powershell
