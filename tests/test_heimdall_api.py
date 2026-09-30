@@ -265,3 +265,29 @@ def test_acoustic_prepare_cancel(monkeypatch):
         while manager.snapshot()["state"] == "preparing" and time.monotonic() < deadline:
             time.sleep(0.005)
         assert manager.snapshot()["state"] == "canceled"
+
+def test_serial_port_listing_is_read_only_and_well_formed():
+    with TestClient(sim_server.app) as client:
+        response = client.get("/hw_ports")
+        assert response.status_code == 200
+        ports = response.json()["ports"]
+        assert isinstance(ports, list)
+        for port in ports:
+            assert set(port) == {"device", "description", "hwid"}
+
+
+def test_init_payload_carries_the_deployed_array_layout():
+    with TestClient(sim_server.app) as client:
+        assert client.post("/hw_connect", json={"transport": "emulator", "rows": 6, "columns": 6,
+                                                "azimuth_min_deg": -40, "azimuth_max_deg": 40,
+                                                "elevation_min_deg": -40, "elevation_max_deg": 40}).status_code == 200
+        with client.websocket_connect("/realtime_hw") as websocket:
+            initial = websocket.receive_json()
+            assert initial["type"] == "init"
+            layout = initial["array_layout"]
+            assert layout["units"] == "mm"
+            assert len(layout["positions"]) == 44
+            assert layout["coordinate_system"]["x"] == "right"
+            frame = websocket.receive_json()
+            assert "array_layout" not in frame
+        client.post("/hw_disconnect")

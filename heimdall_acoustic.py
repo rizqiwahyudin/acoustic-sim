@@ -179,7 +179,9 @@ def load_beam_contract(path=DEFAULT_CONTRACT_PATH,
     if data.get("schema") != "heimdall-beam-table-v1":
         raise ValueError("unsupported Heimdall beam contract schema")
     if firmware_header_path is not None and Path(firmware_header_path).is_file():
-        firmware_hash = sha256(Path(firmware_header_path).read_bytes()).hexdigest()
+        # The contract hashes the LF-normalised header; Windows checkouts use CRLF.
+        header = Path(firmware_header_path).read_bytes().replace(b"\r\n", b"\n")
+        firmware_hash = sha256(header).hexdigest()
         if firmware_hash != str(data.get("source_c_header_sha256", "")).lower():
             raise ValueError("acoustic beam contract does not match firmware beam_table_2d.h")
     rows = int(data["rows"])
