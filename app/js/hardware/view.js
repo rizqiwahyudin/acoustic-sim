@@ -12,6 +12,7 @@ import { StatusColumn } from './status.js';
 import { AcousticScene, AuditionPanel, ConnectionPanel } from './connection.js';
 import { fovText } from './geometry.js';
 import { STALE_MS } from './session.js';
+import { dsp } from '../study/dsp.js';
 
 const PREFS_KEY = 'heimdall.hardware.view';
 const FLOORS = [['-60', '−60 dBFS'], ['-50', '−50 dBFS'], ['-40', '−40 dBFS'], ['-30', '−30 dBFS'], ['-20', '−20 dBFS']];
@@ -112,8 +113,25 @@ export function createView(container, {session}) {
   const footRight = h('span');
   const footer = h('footer', {class: 'app-footer'}, footLeft, footRight);
 
+  const bannerText = h('span', {class: 'note note--body'});
+  const banner = h('div', {class: 'banner', role: 'status', hidden: true},
+    h('div', {class: 'banner__text'}, h('span', {class: 'banner__title'}, 'DSP parameters differ from the flashed program'), bannerText),
+    h('div', {class: 'toolbar toolbar--tight'},
+      h('a', {class: 'btn', href: '#study/parameters'}, 'Review in Study'),
+      h('button', {type: 'button', class: 'btn btn--ghost', onClick: () => { dsp.stageFlashed(); window.location.hash = 'study/parameters'; }}, 'Stage a return to flashed')),
+  );
+
   const connectWrap = h('div', {class: 'hw-connect'}, connection.el);
-  container.append(connectWrap, body, footer);
+  container.append(banner, connectWrap, body, footer);
+
+  function renderBanner() {
+    const modified = session.open ? dsp.status?.modified_words || 0 : 0;
+    banner.hidden = modified === 0;
+    const last = dsp.history.find((entry) => !entry.reverted);
+    setText(bannerText, `${modified} ${modified === 1 ? 'word differs' : 'words differ'}${last ? `. Last change: ${last.label}` : ''}. Levels measured now reflect the changed parameters.`);
+  }
+  dsp.addEventListener('change', renderBanner);
+  let dspPoll = null;
 
   // ── Behaviour ──────────────────────────────────────────────────────────
   function steerTo(sector, source) {
@@ -258,12 +276,16 @@ export function createView(container, {session}) {
       state.visible = true;
       scene3d?.start();
       ticker = setInterval(() => render(), 500);
+      const refreshDsp = () => { if (session.open) dsp.load().then(() => dsp.refresh()).catch(() => {}); };
+      refreshDsp();
+      dspPoll = setInterval(refreshDsp, 5000);
       render(true);
     },
     hide() {
       state.visible = false;
       scene3d?.stop();
       clearInterval(ticker);
+      clearInterval(dspPoll);
     },
   };
 }
