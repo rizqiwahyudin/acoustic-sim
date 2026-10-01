@@ -12,6 +12,7 @@ import '@fontsource/archivo/latin-400.css';
 import '@fontsource/archivo/latin-600.css';
 import '@fontsource/archivo/latin-800.css';
 import '../styles/app.css';
+import './shared/scale.js';
 
 import { session } from './hardware/session.js';
 import { $, h, setText } from './shared/dom.js';

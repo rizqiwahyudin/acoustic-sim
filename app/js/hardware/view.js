@@ -83,30 +83,30 @@ export function createView(container, {session}) {
   );
 
   // ── Map, 3D and history ────────────────────────────────────────────────
+  // One stage grid holds the map, the 3D view, a readout line and the charts.
+  // The map and the 3D box start at the same height; the charts sit below
+  // (or beside them on ultrawide screens).
   const mapReadout = h('span', {class: 'readout', 'aria-live': 'polite'});
   const legend = h('span', {class: 'freshness'},
     h('span', {class: 'freshness__item'}, h('span', {class: 'freshness__swatch'}), 'Measured in the last 5 s'),
     h('span', {class: 'freshness__item'}, h('span', {class: 'freshness__swatch freshness__swatch--stale'}), 'Older, kept from an earlier pass'),
   );
-  const mapSection = h('section', {class: 'hw-map', 'aria-label': 'Sector map'},
-    map.el, h('div', {class: 'hw-map__caption'}, mapReadout, legend));
+  const readoutRow = h('div', {class: 'hw-readout'}, mapReadout, legend);
+  const mapSection = h('section', {class: 'hw-map', 'aria-label': 'Sector map'}, map.el);
 
   const sceneBox = h('div', {class: 'scene-box'});
-  const sceneReadout = h('span', {class: 'readout', 'aria-live': 'polite'});
   const cameraButtons = [['behind', 'Behind'], ['above', 'Above'], ['side', 'Side']].map(([key, label]) =>
-    h('button', {type: 'button', class: 'btn btn--sm btn--ghost', onClick: () => scene3d?.setView(key)}, label));
+    h('button', {type: 'button', class: 'btn btn--sm', onClick: () => scene3d?.setView(key)}, label));
   const sceneSection = h('section', {class: 'hw-scene', 'aria-label': '3D view'},
-    h('div', {class: 'hw-scene__head'},
-      h('span', {class: 'hw-scene__hint'}, 'Sectors on a sphere in front of the array. Drag to rotate, click a tile to hold the beam.'),
-      h('div', {class: 'toolbar toolbar--tight'}, ...cameraButtons),
-    ),
+    h('span', {class: 'hw-scene__hint'}, 'Sectors around the array · drag to rotate, click a tile to hold the beam'),
     sceneBox,
-    sceneReadout,
   );
+  const sceneTools = h('div', {class: 'scene-box__tools'}, ...cameraButtons);
 
   const waiting = h('p', {class: 'hw-waiting', hidden: true});
-  const panels = h('div', {class: 'hw-panels'}, mapSection, sceneSection, history.el);
-  const main = h('div', {class: 'hw-main'}, toolbar, viewbar, waiting, panels);
+  const stage = h('div', {class: 'hw-stage'}, mapSection, sceneSection, readoutRow, history.el);
+  const controls = h('div', {class: 'hw-controls'}, toolbar, viewbar);
+  const main = h('div', {class: 'hw-main'}, controls, waiting, stage);
   const body = h('div', {class: 'hw-body'}, main, status.el);
 
   const footLeft = h('span');
@@ -150,6 +150,7 @@ export function createView(container, {session}) {
     if (scene3d) return;
     return import('./scene3d.js').then(({SectorScene}) => {
       scene3d = new SectorScene(sceneBox, {onPick: (sector) => steerTo(sector, ' from the 3D view'), onHover: setHover});
+      sceneBox.append(sceneTools);
       if (state.visible) scene3d.start();
       render(true);
     });
@@ -179,7 +180,6 @@ export function createView(container, {session}) {
         + (Number.isFinite(level) ? ` · ${num(level, 1)} dBFS` : '') + ` · ${freshness}`;
     }
     setText(mapReadout, text);
-    setText(sceneReadout, text);
   }
 
   function renderFooter() {
@@ -207,6 +207,21 @@ export function createView(container, {session}) {
     const fov = fovText(frame);
     setText(footRight, cfg ? `${fov ? `Field of view ${fov} · ` : ''}${source} ${cfg.rows} × ${cfg.columns}` : '');
   }
+
+  /**
+   * Largest square cell that fits the height of the stage row and the share
+   * of the width the map may take, so the whole map is always on screen.
+   */
+  function cellSize(cfg) {
+    const split = prefs.view === 'split';
+    const height = mapSection.clientHeight || 520;
+    const width = (stage.clientWidth || 1100) * (split ? 0.46 : 0.62);
+    const byHeight = (height - 66) / cfg.rows - 4;
+    const byWidth = (width - 132) / cfg.columns - 4;
+    return Math.max(12, Math.min(120, Math.floor(Math.min(byHeight, byWidth))));
+  }
+
+  new ResizeObserver(() => render(true)).observe(stage);
 
   let queued = false;
   let forceNext = false;
@@ -247,15 +262,13 @@ export function createView(container, {session}) {
 
     const hasLevels = Boolean(frame?.configuration && frame.levels_db);
     waiting.hidden = hasLevels;
-    panels.hidden = !hasLevels;
+    stage.hidden = !hasLevels;
     if (!hasLevels) {
       setText(waiting, open
         ? `Connected to ${session.transportLabel}. Waiting for the firmware to report its beam table…`
         : '');
     } else {
-      const split = prefs.view === 'split';
-      const cellPx = Math.max(16, Math.min(split ? 56 : 72, Math.floor((split ? 336 : 432) / cfg.columns)));
-      if (!mapSection.hidden) map.render(frame, {floor: prefs.floor, showValues: prefs.showValues, session, cellPx});
+      if (!mapSection.hidden) map.render(frame, {floor: prefs.floor, showValues: prefs.showValues, session, cellPx: cellSize(cfg)});
       if (!sceneSection.hidden && scene3d) scene3d.render(frame, {floor: prefs.floor, session});
       history.render(session, {floor: prefs.floor, force});
     }

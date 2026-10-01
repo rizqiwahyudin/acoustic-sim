@@ -161,7 +161,7 @@ export function parametersScreen({canWrite}) {
     const muteNote = h('span', {class: 'note'});
     const el = h('div', {class: 'st-panel', role: 'tabpanel'},
       h('div', {class: 'st-panel__head'}, h('h2', {class: 'page-title'}, 'Gain taper and mutes'),
-        h('p', {class: 'lede'}, 'One gain and one mute per microphone. The delays still steer the beam. A taper lowers the sidelobes and widens the main beam; muting single microphones checks channel order and left/right.')),
+        h('p', {class: 'lede'}, 'One gain and one mute per microphone. A taper lowers the sidelobes and widens the main beam; muting single microphones checks channel order and left/right.')),
       h('div', {class: 'toolbar'}, presets.el, h('span', {class: 'inline-field'}, h('label', {}, 'Scale'), norm)),
       h('div', {class: 'st-figures'},
         h('figure', {class: 'st-figure st-figure--layout'}, h('figcaption', {class: 'figure-caption'}, 'Proposed gain per microphone, seen from behind. Click one to inspect it.'), layout),
@@ -170,10 +170,11 @@ export function parametersScreen({canWrite}) {
           cut,
           h('div', {class: 'chart-legend'}, h('span', {class: 'lg-line lg-line--device'}), 'On the device now', h('span', {class: 'lg-line lg-line--proposed'}), 'Proposed')),
       ),
-      metrics,
-      h('section', {class: 'st-mic'},
-        h('div', {class: 'st-mic__text'}, micTitle, micMeta, micGain),
-        h('div', {class: 'st-mic__mute'}, h('label', {class: 'check'}, muteBox, 'Mute this microphone'), muteNote)),
+      h('div', {class: 'st-bottom'},
+        metrics,
+        h('section', {class: 'st-mic'},
+          h('div', {class: 'st-mic__text'}, micTitle, micMeta, micGain),
+          h('div', {class: 'st-mic__mute'}, h('label', {class: 'check'}, muteBox, 'Mute this microphone'), muteNote))),
       h('p', {class: 'note'}, 'Predicted from the microphone positions for a distant source. Measure the real response under Measurements.'),
     );
 
@@ -263,7 +264,7 @@ export function parametersScreen({canWrite}) {
       h('figure', {class: 'st-figure'}, h('figcaption', {class: 'figure-caption'}, 'Response of both stages together (DSP00)'), response,
         h('div', {class: 'chart-legend'}, h('span', {class: 'lg-line lg-line--device'}), 'On the device now', h('span', {class: 'lg-line lg-line--proposed'}), 'Proposed')),
       readouts, taps,
-      h('p', {class: 'note'}, 'Assumes coefficient k sits at the block address + k. The flashed taps are symmetric, so the export cannot confirm the order: check it with the DSP owner before writing asymmetric taps. Eleven taps at 48 kHz cannot make a sharp edge; a high-pass below 1 kHz needs longer filters or biquads in the DSP program.'),
+      h('p', {class: 'note'}, 'Assumes coefficient k sits at the block address + k; the flashed taps are symmetric, so confirm the order with the DSP owner before writing asymmetric taps. Eleven taps at 48 kHz cannot make a sharp edge.'),
     );
 
     function presetTaps(defaults) {

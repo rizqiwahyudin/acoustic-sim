@@ -1,5 +1,6 @@
 /**
  * history.js — the last 30 seconds: direction of the answer and its level.
+ * Both charts fill the box the layout gives them and redraw when it changes.
  */
 
 import { h } from '../shared/dom.js';
@@ -19,21 +20,32 @@ export class HistoryCharts {
   constructor() {
     this.direction = new LineChart({label: 'Azimuth and elevation of the answer over the last 30 seconds'});
     this.level = new LineChart({label: 'Level of the answer over the last 30 seconds'});
-    this.directionCaption = h('figcaption', {class: 'figure-caption'}, 'Direction of the answer (degrees)');
-    this.levelCaption = h('figcaption', {class: 'figure-caption'}, 'Level of the answer (dBFS)');
-    this.el = h('section', {class: 'hw-history', 'aria-labelledby': 'hw-history-title'},
-      h('h2', {class: 'hw-history__title', id: 'hw-history-title'}, 'Last 30 seconds'),
-      h('div', {class: 'hw-history__charts'},
-        h('figure', {class: 'hw-figure'}, this.directionCaption, this.direction.el),
-        h('figure', {class: 'hw-figure'}, this.levelCaption, this.level.el),
-      ),
+    this.directionCaption = h('figcaption', {class: 'figure-caption'}, 'Direction over the last 30 s (degrees)');
+    this.levelCaption = h('figcaption', {class: 'figure-caption'}, 'Level over the last 30 s (dBFS)');
+    this.directionBox = h('div', {class: 'chart-box'}, this.direction.el);
+    this.levelBox = h('div', {class: 'chart-box'}, this.level.el);
+    this.el = h('section', {class: 'hw-history', 'aria-label': 'Last 30 seconds'},
+      h('figure', {class: 'hw-figure'}, this.directionCaption, this.directionBox),
+      h('figure', {class: 'hw-figure'}, this.levelCaption, this.levelBox),
     );
     this.lastRender = 0;
+    this.pending = false;
+    this.observer = new ResizeObserver(() => { this.pending = true; });
+    this.observer.observe(this.directionBox);
+    this.observer.observe(this.levelBox);
+  }
+
+  fit() {
+    const a = this.direction.setSize(this.directionBox.clientWidth, this.directionBox.clientHeight);
+    const b = this.level.setSize(this.levelBox.clientWidth, this.levelBox.clientHeight);
+    return a || b;
   }
 
   render(session, {floor, force = false} = {}) {
+    const resized = this.fit() || this.pending;
+    this.pending = false;
     const now = performance.now();
-    if (!force && now - this.lastRender < 200) return;
+    if (!force && !resized && now - this.lastRender < 200) return;
     this.lastRender = now;
     const frame = session.frame;
     const history = session.history;
@@ -70,6 +82,6 @@ export class HistoryCharts {
         end: Number.isFinite(lastLevel) ? num(lastLevel, 1) : '', endBold: true},
     ]);
     this.levelCaption.textContent = session.monitoring
-      ? 'Level of the held beam (dBFS)' : 'Level of the answer (dBFS)';
+      ? 'Level of the held beam over the last 30 s (dBFS)' : 'Level over the last 30 s (dBFS)';
   }
 }

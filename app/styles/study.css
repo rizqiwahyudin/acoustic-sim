@@ -34,19 +34,31 @@
 .switch[aria-checked="true"] .switch__knob { left: 19px; background: var(--on-accent); }
 .switch:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.st-params { flex: 1; display: flex; flex-wrap: wrap; gap: 32px; padding: var(--gutter); align-items: flex-start; }
-.st-browser { flex: 0 1 272px; min-width: min(240px, 100%); display: flex; flex-direction: column; gap: 12px; }
-.st-editor { flex: 1 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+/* Three columns that fill the window; each scrolls on its own when needed. */
+.st-params {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 340px;
+  gap: 28px;
+  padding: 16px var(--gutter) 12px;
+}
+:root[data-wide="true"] .st-params { grid-template-columns: 340px minmax(0, 1fr) 440px; }
+.st-browser, .st-editor, .st-changes { min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--raised) transparent; }
+.st-browser { display: flex; flex-direction: column; gap: 12px; padding-right: 6px; }
+.st-editor { min-width: 0; display: flex; flex-direction: column; gap: 14px; padding-right: 6px; }
 .st-changes {
-  flex: 0 1 340px;
-  min-width: min(300px, 100%);
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding-left: 32px;
+  gap: 16px;
+  padding-left: 28px;
   border-left: 1px solid var(--line);
 }
-.st-panel { display: flex; flex-direction: column; gap: 20px; }
+.st-changes .section { flex: none; }
+.st-changes .section + .section { padding-top: 16px; }
+.st-panel { display: flex; flex-direction: column; gap: 14px; }
+.st-panel .lede { font-size: 13px; }
+.st-bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 32px; align-items: start; }
 .st-panel__head { display: flex; flex-direction: column; gap: 6px; }
 
 /* Block browser */
@@ -85,9 +97,9 @@
 .st-legend > span { display: inline-flex; align-items: center; gap: 8px; }
 
 /* Editors */
-.st-figures { display: flex; flex-wrap: wrap; gap: 24px 32px; align-items: flex-start; }
-.st-figure { margin: 0; flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
-.st-figure--layout { flex: 0 1 300px; min-width: 240px; }
+.st-figures { display: grid; grid-template-columns: minmax(200px, 250px) minmax(0, 1fr); gap: 12px 28px; align-items: start; }
+.st-figure { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; max-width: 820px; }
+.st-figure .chart { max-height: 215px; }
 .mic-layout { width: 100%; height: auto; display: block; border-radius: var(--radius); background: var(--surface); }
 .mic-layout__ring { fill: none; stroke: var(--line); }
 .mic-layout__dot { fill: var(--accent); stroke: var(--line); cursor: pointer; }
@@ -99,12 +111,12 @@
 .lg-line--device { border-top: 1.5px dashed var(--muted); }
 .lg-line--proposed { border-top: 2px solid var(--accent); }
 
-.metric-grid { display: grid; grid-template-columns: minmax(200px, 1fr) repeat(2, minmax(100px, auto)); max-width: 580px; font-size: 13px; }
-.metric-grid > span { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.metric-grid { display: grid; grid-template-columns: minmax(160px, 1fr) repeat(2, minmax(80px, auto)); font-size: 13px; }
+.metric-grid > span { padding: 6px 0; border-bottom: 1px solid var(--line); }
 .metric-grid > span:nth-child(3n+2), .metric-grid > span:nth-child(3n+3) { text-align: right; }
 .metric-grid__head { font-size: 12px; color: var(--subtle); }
 
-.st-mic { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 32px; padding-top: 20px; border-top: 1px solid var(--line); }
+.st-mic { display: flex; flex-direction: column; gap: 10px; padding-left: 28px; border-left: 1px solid var(--line); }
 .st-mic__text, .st-mic__mute { display: flex; flex-direction: column; gap: 4px; }
 .st-mic__title { font-size: 15px; font-weight: 600; }
 
@@ -166,3 +178,9 @@
 .ms-figure { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-top: 8px; }
 .ms-figure__value { font-size: 40px; font-weight: 500; line-height: 1; }
 .textarea { height: auto; min-height: 64px; padding: 8px 12px; resize: vertical; max-width: 560px; }
+
+/* Columns scroll instead of squeezing their content. */
+.st-browser > *, .st-editor > *, .st-changes > * { flex: none; }
+.st-changes { padding-right: 6px; }
+.st-changes .inline-field { display: flex; }
+.st-changes .inline-field .input { flex: 1; min-width: 0; }

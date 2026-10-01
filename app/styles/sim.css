@@ -12,7 +12,7 @@
 .sim-settings {
   flex: 0 1 290px;
   min-width: min(260px, 100%);
-  max-height: calc(100vh - var(--header-h) - 2 * var(--gutter));
+  max-height: calc(var(--app-h, 100vh) - var(--header-h) - 2 * var(--gutter));
   overflow-y: auto;
   padding-right: 10px;
   display: flex;

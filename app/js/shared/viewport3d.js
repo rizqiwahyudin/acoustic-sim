@@ -6,12 +6,13 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { currentZoom, onZoom } from './scale.js';
 
 export class Viewport3D {
   constructor(container, {background = '#1a1c20', fov = 40, near = 0.02, far = 200} = {}) {
     this.container = container;
     this.renderer = new THREE.WebGLRenderer({antialias: true});
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.applyPixelRatio();
     this.renderer.setClearColor(new THREE.Color(background));
     this.canvas = this.renderer.domElement;
     this.canvas.className = 'viewport3d__canvas';
@@ -39,7 +40,13 @@ export class Viewport3D {
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
+    this.offZoom = onZoom(() => { this.applyPixelRatio(); this.resize(true); });
     this.loop = this.loop.bind(this);
+  }
+
+  /** The app is zoomed to fit the window, so render at the zoomed resolution. */
+  applyPixelRatio() {
+    this.renderer.setPixelRatio(Math.min((window.devicePixelRatio || 1) * currentZoom(), 3));
   }
 
   start() {
@@ -67,11 +74,11 @@ export class Viewport3D {
     this.renderer.render(this.scene, this.camera);
   }
 
-  resize() {
+  resize(force = false) {
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
     if (!width || !height) return;
-    if (width === this.width && height === this.height) return;
+    if (!force && width === this.width && height === this.height) return;
     this.width = width;
     this.height = height;
     this.renderer.setSize(width, height, false);
@@ -117,6 +124,7 @@ export class Viewport3D {
   dispose() {
     this.stop();
     this.resizeObserver.disconnect();
+    this.offZoom?.();
     this.controls.dispose();
     this.renderer.dispose();
     this.canvas.remove();

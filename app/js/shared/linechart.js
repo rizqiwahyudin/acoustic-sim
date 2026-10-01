@@ -20,6 +20,16 @@ export class LineChart {
     this.y = {min: 0, max: 1, ticks: []};
   }
 
+  /** Redraw at a new size in design pixels; text keeps its size. */
+  setSize(width, height) {
+    if (!(width > 0 && height > 0)) return false;
+    if (Math.abs(width - this.width) < 1 && Math.abs(height - this.height) < 1) return false;
+    this.width = width;
+    this.height = height;
+    this.el.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    return true;
+  }
+
   setAxes({x, y}) {
     if (x) this.x = x;
     if (y) this.y = y;

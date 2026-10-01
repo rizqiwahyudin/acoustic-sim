@@ -79,7 +79,7 @@ export class StatusColumn {
     );
 
     this.eventList = h('ol', {class: 'events'});
-    const events = h('section', {class: 'section', 'aria-labelledby': 'hw-events-title'},
+    const events = h('section', {class: 'section section--events', 'aria-labelledby': 'hw-events-title'},
       h('div', {class: 'section__row'},
         h('h2', {class: 'section__title', id: 'hw-events-title'}, 'Events'),
         h('button', {type: 'button', class: 'btn btn--sm btn--quiet', onClick: () => session.clearEvents()}, 'Clear'),
@@ -98,7 +98,7 @@ export class StatusColumn {
       ),
     );
 
-    this.el = h('aside', {class: 'hw-aside', 'aria-label': 'Status'},
+    this.el = h('aside', {class: 'hw-aside scroll-y', 'aria-label': 'Status'},
       answer, refresh, this.truth, extra || null, recording, events, advanced);
     session.addEventListener('events', () => this.renderEvents());
     this.renderEvents();
@@ -230,7 +230,7 @@ export class StatusColumn {
   }
 
   renderEvents() {
-    const items = [...this.session.events].reverse().slice(0, 8);
+    const items = [...this.session.events].reverse().slice(0, 30);
     if (items.length === 0) {
       this.eventList.replaceChildren(h('li', {class: 'events__empty'}, 'No events yet.'));
       return;

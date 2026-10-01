@@ -1,33 +1,41 @@
 /* Beam pattern screen (style A) and controls shared with the Simulator. */
 
+/* Three columns that fill the window; the side columns scroll on their own. */
 .bp {
   flex: 1;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 32px;
-  padding: var(--gutter);
-  align-items: flex-start;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr) 340px;
+  gap: 28px;
+  padding: 16px var(--gutter);
 }
+:root[data-wide="true"] .bp { grid-template-columns: 320px minmax(0, 1fr) 480px; }
 
-.bp-settings { flex: 0 1 260px; min-width: min(240px, 100%); display: flex; flex-direction: column; gap: 24px; }
-.bp-centre { flex: 1 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.bp-settings { min-height: 0; overflow-y: auto; padding-right: 6px; display: flex; flex-direction: column; gap: 20px; scrollbar-width: thin; scrollbar-color: var(--raised) transparent; }
+.bp-settings .section + .section { padding-top: 18px; }
+.bp-centre { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 .bp-centre__title { display: flex; flex-direction: column; gap: 2px; }
 .bp-title { font-size: 15px; font-weight: 600; }
-.scene-box--pattern { aspect-ratio: 7 / 6; }
+.scene-box--pattern { flex: 1; min-height: 0; aspect-ratio: auto; }
 .scene-label--accent { color: var(--accent); font-weight: 600; font-size: 13px; }
 
 .bp-figures {
-  flex: 0 1 340px;
-  min-width: min(300px, 100%);
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding-left: 32px;
+  gap: 16px;
+  padding-left: 28px;
   border-left: 1px solid var(--line);
+  scrollbar-width: thin;
+  scrollbar-color: var(--raised) transparent;
 }
+.bp-figures .section { flex: none; gap: 10px; }
+.bp-figures .section + .section { padding-top: 16px; }
 
 .bp-empty {
-  min-height: 420px;
+  flex: 1;
+  min-height: 0;
   border: 1px dashed var(--line);
   border-radius: var(--radius);
   display: flex;
@@ -86,3 +94,4 @@
 .mic-list__pick { flex: 1; display: flex; gap: 10px; padding: 6px 8px; border: 0; background: none; color: var(--text); font-size: 12px; text-align: left; cursor: pointer; }
 .mic-list__index { width: 22px; color: var(--subtle); font-family: var(--font-mono); }
 .mic-list__empty { padding: 8px; font-size: 12px; color: var(--muted); }
+.bp-settings > * { flex: none; }

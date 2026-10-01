@@ -1,6 +1,7 @@
-/* Hardware screen (style A). */
+/* Hardware screen (style A). The screen fills the window: nothing scrolls
+   except the status column and the connection panel when they overflow. */
 
-.hw-connect { padding: 32px var(--gutter) 48px; }
+.hw-connect { flex: 1; min-height: 0; overflow: auto; padding: 32px var(--gutter) 48px; }
 
 .connect { max-width: 920px; display: flex; flex-direction: column; gap: 20px; }
 .connect__head { display: flex; flex-direction: column; gap: 6px; }
@@ -14,33 +15,78 @@
 
 .hw-body {
   flex: 1;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 32px;
-  padding: var(--gutter);
-  align-items: flex-start;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 28px;
+  padding: 16px var(--gutter) 12px;
 }
 
-.hw-main { flex: 1 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+.hw-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
 
+.hw-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 28px; }
 .toolbar__label { font-size: 13px; color: var(--muted); }
 .toolbar--tight { gap: 6px; }
 
-.hw-viewbar {
+.hw-viewbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; }
+.hw-viewbar__right { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+
+.hw-waiting { color: var(--muted); padding: 24px 0; }
+
+/* Stage: map and 3D on one line, a readout line, then the charts. */
+.hw-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 10px 28px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto 172px;
+  grid-template-areas:
+    "map scene"
+    "read read"
+    "hist hist";
+}
+.hw-body[data-view="map"] .hw-stage {
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "map hist"
+    "read hist";
+}
+.hw-body[data-view="3d"] .hw-stage {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "scene"
+    "read"
+    "hist";
+}
+/* Ultrawide: the charts move beside the views instead of under them. */
+:root[data-wide="true"] .hw-body[data-view="split"] .hw-stage {
+  grid-template-columns: max-content minmax(0, 1fr) minmax(420px, 28%);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "map scene hist"
+    "read read hist";
+}
+:root[data-wide="true"] .hw-body[data-view="3d"] .hw-stage {
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 28%);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "scene hist"
+    "read hist";
+}
+
+.hw-map { grid-area: map; min-height: 0; min-width: 0; overflow: hidden; }
+.hw-scene { grid-area: scene; min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.hw-readout {
+  grid-area: read;
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px 24px;
+  gap: 4px 24px;
+  font-size: 13px;
+  color: var(--muted);
 }
-.hw-viewbar__right { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
-
-.hw-waiting { color: var(--muted); padding: 24px 0; }
-
-.hw-panels { display: flex; flex-wrap: wrap; gap: 24px 32px; align-items: flex-start; }
-
-.hw-map { flex: 0 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-.hw-map__caption { display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--muted); max-width: 584px; }
 .readout { color: var(--text); font-size: 13px; }
 
 .freshness { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 16px; }
@@ -53,7 +99,7 @@
 
 /* Sector map */
 .map { display: flex; flex-direction: column; gap: 4px; --label-w: 52px; }
-.map__axis-title { font-size: 12px; color: var(--subtle); }
+.map__axis-title { font-size: 12px; line-height: 16px; color: var(--subtle); }
 .map__axis-title--az { margin-left: calc(var(--label-w) + 8px); width: var(--grid-w); text-align: center; }
 .map__body { display: flex; align-items: flex-start; gap: 8px; }
 .map__rows {
@@ -131,9 +177,9 @@
 .map__truth::after { top: 8px; left: 0; height: 2px; width: 18px; }
 .map__truth.is-dropout::before, .map__truth.is-dropout::after { background: var(--warn); }
 
-.map__legend { display: flex; flex-direction: column; gap: 6px; }
-.map__legend-unit { font-size: 12px; color: var(--subtle); height: 16px; }
-.map__legend-scale { display: flex; gap: 8px; height: calc(var(--grid-h) - 22px); }
+.map__legend { display: flex; flex-direction: column; gap: 6px; margin-top: -20px; }
+.map__legend-unit { font-size: 12px; line-height: 14px; color: var(--subtle); }
+.map__legend-scale { display: flex; gap: 8px; height: var(--grid-h); }
 .map__legend-bar { width: 12px; border-radius: 3px; }
 .map__ticks {
   display: flex;
@@ -145,10 +191,9 @@
   color: var(--muted);
 }
 
-/* 3D */
-.hw-scene { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
-.hw-scene__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.hw-scene__hint { font-size: 13px; color: var(--muted); }
+/* 3D: the hint takes the same line as the map's "Elevation" title, so the
+   3D box and the map cells start at the same height. */
+.hw-scene__hint { font-size: 12px; line-height: 16px; color: var(--subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scene-box {
   position: relative;
   width: 100%;
@@ -158,7 +203,9 @@
   background: var(--surface);
   cursor: grab;
 }
-.hw-body[data-view="split"] .scene-box { aspect-ratio: 560 / 540; }
+.hw-scene .scene-box { flex: 1; min-height: 0; aspect-ratio: auto; }
+.scene-box__tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; z-index: 2; }
+.scene-box__tools .btn { background: color-mix(in oklab, var(--surface) 82%, transparent); color: var(--muted); }
 .viewport3d__canvas { display: block; width: 100%; height: 100%; }
 .scene-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .scene-label {
@@ -174,27 +221,28 @@
 .scene-label--muted { color: var(--muted); }
 .scene-label--marker { transform: translate(0, -50%); color: var(--text); font-weight: 600; font-size: 13px; }
 
-/* History */
-.hw-history { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-.hw-body[data-view="3d"] .hw-history,
-.hw-body[data-view="split"] .hw-history { flex-basis: 100%; }
-.hw-history__title { font-size: 15px; font-weight: 600; }
-.hw-history__charts { display: flex; flex-direction: column; gap: 16px 24px; }
-.hw-body[data-view="3d"] .hw-history__charts,
-.hw-body[data-view="split"] .hw-history__charts { flex-direction: row; }
-.hw-figure { margin: 0; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+/* History: two charts in a row under the views, or stacked beside them. */
+.hw-history { grid-area: hist; min-height: 0; min-width: 0; display: grid; gap: 8px 28px; grid-template-columns: 1fr 1fr; }
+.hw-body[data-view="map"] .hw-history,
+:root[data-wide="true"] .hw-history { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr 1fr; }
+.hw-figure { margin: 0; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 4px; }
 .figure-caption { font-size: 13px; color: var(--muted); }
+.chart-box { min-height: 0; min-width: 0; position: relative; }
+.chart-box > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 
 /* Status column */
 .hw-aside {
-  flex: 0 1 360px;
-  min-width: min(300px, 100%);
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding-left: 32px;
+  gap: 16px;
+  padding-left: 28px;
   border-left: 1px solid var(--line);
 }
+.hw-aside .section { flex: none; gap: 10px; }
+.hw-aside .section + .section { padding-top: 16px; }
+.hw-aside .section--events { flex: 1 1 96px; min-height: 96px; }
+.hw-aside .section--events .events { min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--raised) transparent; }
 .answer { display: flex; gap: 32px; align-items: flex-end; }
 .answer__figure { display: flex; flex-direction: column; gap: 6px; }
 .answer__value { font-size: 44px; font-weight: 500; line-height: 1; letter-spacing: -0.01em; }
