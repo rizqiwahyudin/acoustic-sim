@@ -3,5 +3,5 @@ pyroomacoustics
 matplotlib
 scipy
 fastapi
-uvicorn
+uvicorn[standard]
 pyserial
