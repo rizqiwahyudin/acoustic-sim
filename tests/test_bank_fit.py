@@ -60,6 +60,17 @@ def test_flat_or_malformed_maps_give_no_answer(bank7):
     assert fit.fit([float("nan")] * fit.beams) is None
 
 
+def test_unit_patterns_are_centred_unit_rows_that_rank_as_the_fit(bank7):
+    _, fit = bank7
+    unit = fit.unit_patterns()
+    np.testing.assert_allclose(unit.sum(axis=1), 0.0, atol=1e-9)
+    np.testing.assert_allclose((unit ** 2).sum(axis=1), 1.0)
+    levels = fit.fingerprint(-12.0, 9.0) * 500 + 40
+    best = int(np.argmax(np.maximum(unit @ (levels - levels.mean()), 0.0)))
+    row, column = divmod(best, len(fit.azimuths))
+    assert fit.azimuths[column] == -12.0 and abs(fit.elevations[row] - 9.0) <= 1.0
+
+
 def test_noise_alone_fits_poorly(bank7):
     _, fit = bank7
     quality = [fit.fit(np.random.default_rng(seed).normal(100.0, 10.0, fit.beams)).quality for seed in range(20)]

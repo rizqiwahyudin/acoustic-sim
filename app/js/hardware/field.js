@@ -13,8 +13,8 @@ import { angularEdges, direction } from './geometry.js';
 const RAD = Math.PI / 180;
 const DEG = 180 / Math.PI;
 const SECTOR_MODES = new Set(['F', 'C', 'G']);
-/** Where the Live direction comes from: the firmware's target beam, the backend's pattern fit, or both. */
-export const DIRECTIONS = [['firmware', 'Firmware'], ['fit', 'Fit'], ['both', 'Both']];
+/** Which Live direction to show, both from the firmware: its peak beam (BANK_TARGET), its pattern fit (BANK_FIT), or both. */
+export const DIRECTIONS = [['firmware', 'Peak'], ['fit', 'Fit'], ['both', 'Both']];
 
 const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
 

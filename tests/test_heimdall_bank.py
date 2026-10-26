@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from bank_fit import BankFit
 from heimdall_bank import FRACTION_BITS, BankTracker, LOST_MAPS
 from heimdall_protocol import HeimdallState, ProtocolError, parse_line
 from heimdall_transport import DeployedProgram, EmulatorHeimdallTransport, validate_command
@@ -32,9 +33,10 @@ def bank_program(selectors=True):
 
 
 class ScriptedBankEmulator(EmulatorHeimdallTransport):
-    def __init__(self, program):
+    def __init__(self, program, bank_fit=None):
         super().__init__(rows=7, columns=7, azimuth_min_deg=-40, azimuth_max_deg=40,
-                         elevation_min_deg=-40, elevation_max_deg=40, sector_time_s=0.0, program=program)
+                         elevation_min_deg=-40, elevation_max_deg=40, sector_time_s=0.0, program=program,
+                         bank_fit=bank_fit)
         self.map_levels = [1000] * 25
         self.beam = 0
         self.running = True
@@ -76,11 +78,27 @@ def test_bank_records_parse_and_reach_the_snapshot():
     assert state.snapshot()["bank"] is None and state.snapshot()["outputs"] is None
 
 
+def test_bank_fit_record_reaches_the_snapshot_until_the_stop():
+    state = HeimdallState()
+    state.apply_line("READY,2D,7,7,49,44")
+    state.apply_line("BANK,5,5,12000")
+    state.apply_line("SCAN_STARTED,B")
+    state.apply_line("LEVELS,B,5,5," + ",".join(["1000"] * 25))
+    assert state.snapshot()["bank"]["fit"] is None
+    state.apply_line("BANK_FIT,12.5000,-3.2500,812,31,4870")
+    assert state.snapshot()["bank"]["fit"] == {"azimuth_deg": 12.5, "elevation_deg": -3.25, "quality": 0.812,
+                                               "sector": 31, "elapsed_us": 4870}
+    state.apply_line("SCAN_STOPPED")
+    assert state.snapshot()["bank"]["fit"] is None
+
+
 @pytest.mark.parametrize("line", [
     "BANK,0,5,12000",
     "LEVELS,B,2,2,1,2,3",
     "LEVELS,X,1,1,5",
     "BANK_TARGET,1,2,0,0,3",
+    "BANK_FIT,1,2,500,3",
+    "BANK_FIT,1,2,1001,3,0",
     "CH1,3,0,0",
     "SCAN_STARTED,Z",
 ])
@@ -198,3 +216,48 @@ def test_deployed_program_reads_the_bank_contract():
     assert (program.bank_rows, program.bank_columns, program.bank_rate_hz) == (5, 5, 12000)
     assert len(program.bank_azimuth_deg) == 25 and program.selectors
     assert program.configuration_lines() == ["MOUNT,cw90", "BANK,5,5,12000", "OUTPUTS,44,25"]
+
+
+def fit_emulator():
+    contract = json.loads(BANK_CONTRACT.read_text(encoding="ascii"))
+    fit = BankFit.from_contract(contract)
+    emulator = ScriptedBankEmulator(DeployedProgram.from_contract(contract), bank_fit=fit)
+    lines = []
+    apply_line = emulator.apply_line
+    emulator.apply_line = lambda line: lines.append(line) or apply_line(line)
+    return emulator, fit, lines
+
+
+def stare_at(emulator, fit, azimuth_deg, elevation_deg):
+    emulator._handle_command("B")
+    emulator._stare_cycle()
+    emulator.map_levels = [int(round(v)) for v in 4000 * fit.fingerprint(azimuth_deg, elevation_deg) + 300]
+    for _ in range(3):
+        emulator._stare_cycle()
+
+
+@pytest.mark.skipif(not BANK_CONTRACT.exists(), reason="bank export not present")
+def test_emulator_stare_reports_the_pattern_fit_and_steers_to_it():
+    emulator, fit, lines = fit_emulator()
+    stare_at(emulator, fit, 20.0, -5.0)
+    fits = [line for line in lines if line.startswith("BANK_FIT,")]
+    targets = [line for line in lines if line.startswith("BANK_TARGET,")]
+    assert len(fits) == len(targets) >= 1
+    # As the firmware: BANK_FIT comes just before the map's BANK_TARGET, which carries the fitted sector.
+    assert lines.index(fits[0]) + 1 == lines.index(targets[0])
+    _, azimuth, elevation, quality, sector, _ = fits[-1].split(",")
+    assert abs(float(azimuth) - 20.0) <= 1.0 and abs(float(elevation) + 5.0) <= 1.0 and int(quality) >= 990
+    assert targets[-1].split(",")[5] == sector
+    snapshot = emulator.snapshot()
+    assert snapshot["bank"]["fit"]["sector"] == int(sector) == snapshot["target"]["sector"]
+    assert emulator.protocol_errors == 0
+
+
+@pytest.mark.skipif(not BANK_CONTRACT.exists(), reason="bank export not present")
+def test_emulator_stare_with_the_fit_off_steers_to_the_best_beam():
+    emulator, fit, lines = fit_emulator()
+    emulator.parameter_service.set(emulator, "fit", 0)
+    stare_at(emulator, fit, 20.0, -5.0)
+    assert not [line for line in lines if line.startswith("BANK_FIT,")]
+    assert [line for line in lines if line.startswith("BANK_TARGET,")]
+    assert emulator.snapshot()["bank"]["fit"] is None

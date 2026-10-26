@@ -133,8 +133,9 @@ export function createView(container, {session}) {
     },
   });
   directionSeg.set(prefs.direction);
-  const directionPick = h('span', {class: 'pick', title: 'Live direction: the firmware target beam, the pattern fit '
-    + '(all beams fitted to the expected pattern; the firmware still decides if there is a target), or both (the fit as a ring)'},
+  const directionPick = h('span', {class: 'pick', title: 'Live direction, both computed on the board: the peak beam, the pattern fit '
+    + '(all beams fitted to the expected pattern; the peak still decides if there is a target), or both (the fit as a ring). '
+    + 'Which one steers the beam is the Live aim setting.'},
   'Direction', directionSeg.el);
   const fieldHead = h('header', {class: 'panel__head'}, h('h2', {class: 'label'}, 'Field'),
     h('div', {class: 'tools'}, viewSeg.el, cameraSeg.el, h('label', {class: 'pick'}, 'Floor', floorSelect), stylePick, valuesPick,

@@ -24,6 +24,7 @@ FIRMWARE_SETTINGS = {
     "channel": (0, 1, 0),
     "map_record": (0, 1, 0),
     "tone": (0, 10000, 0),
+    "fit": (0, 1, 1),
 }
 
 # How the board is turned, seen from behind (beamforming_mathematics/array_mount.py).
@@ -274,6 +275,16 @@ def parse_line(line: str) -> dict[str, Any]:
                 "ch1_source": _integer(parts[2], "Ch1 source", 0, 2),
                 "ch1_index": _integer(parts[3], "Ch1 index", 0, 399)}
 
+    if record_type == "BANK_FIT" and len(parts) == 6:
+        return {
+            "type": "bank_fit",
+            "azimuth_deg": _number(parts[1], "azimuth"),
+            "elevation_deg": _number(parts[2], "elevation"),
+            "quality": _integer(parts[3], "quality", 0, 1000) / 1000.0,
+            "sector": _integer(parts[4], "sector", 0, 65535),
+            "elapsed_us": _integer(parts[5], "elapsed"),
+        }
+
     if record_type == "BANK_TARGET" and len(parts) == 7:
         return {
             "type": "bank_target",
@@ -448,6 +459,7 @@ class HeimdallState:
         self.bank_levels_raw: list[int] | None = None
         self.bank_maps = 0
         self.bank_target: dict[str, Any] | None = None
+        self.bank_fit: dict[str, Any] | None = None
         self.outputs: dict[str, Any] | None = None
         self.array_mount: str | None = None
         self.ch1: dict[str, Any] | None = None
@@ -468,6 +480,7 @@ class HeimdallState:
             self.bank = None
             self.bank_levels_raw = None
             self.bank_target = None
+            self.bank_fit = None
             self.outputs = None
             self.array_mount = None
             if configuration != self.configuration:
@@ -504,6 +517,7 @@ class HeimdallState:
             self.target = None
             self.last_steer = None
             self.bank_target = None
+            self.bank_fit = None
         elif record_type == "bank":
             self.bank = {key: record[key] for key in ("rows", "columns", "rate_hz")}
         elif record_type == "outputs":
@@ -542,6 +556,8 @@ class HeimdallState:
             if record["sector"] >= self.configuration.sectors:
                 raise ProtocolError("bank target sector is outside READY dimensions")
             self.bank_target = record
+        elif record_type == "bank_fit":
+            self.bank_fit = {key: value for key, value in record.items() if key != "type"}
         elif record_type == "ch1":
             self.ch1 = {key: record[key] for key in ("source", "index", "code")}
         elif record_type == "scan_done":
@@ -552,6 +568,7 @@ class HeimdallState:
             self.mode = "IDLE"
             self.target = None
             self.bank_target = None
+            self.bank_fit = None
         elif record_type == "steer_ok":
             self._validate_grid_position(record)
             self.mode = "IDLE"
@@ -711,6 +728,8 @@ class HeimdallState:
             "levels_db": db,
             "maps": self.bank_maps,
             "target": deepcopy(self.bank_target),
+            # The firmware's pattern fit (BANK_FIT) of the latest map with a target.
+            "fit": deepcopy(self.bank_fit),
         }
 
     def _require_configuration(self) -> None:

@@ -458,22 +458,13 @@ def test_bank_frames_carry_the_contract_beam_directions():
         client.post("/hw_disconnect")
 
 
-def test_bank_fit_follows_each_map_and_needs_the_deployed_program():
-    contract = json.loads(sim_server.default_contract_path().read_text(encoding="ascii"))
-    bank = contract.get("bank")
-    if not bank or not bank.get("mic_delays"):
+def test_bank_frames_pass_the_firmware_fit_through():
+    bank = json.loads(sim_server.default_contract_path().read_text(encoding="ascii")).get("bank")
+    if not bank:
         return
-    sim_server._DEPLOYMENT_CACHE.pop("bank_fit", None)
-    fit = sim_server._bank_fit().fit
-    levels = [int(round(v)) for v in 4000 * fit.fingerprint(25.0, 3.0) + 300]
-    frame = {"rows": bank["rows"], "columns": bank["columns"], "levels_raw": levels, "maps": 17}
-    result = sim_server._bank_with_directions(frame, contract["study"]["map_hash"])["fit"]
-    assert abs(result["azimuth_deg"] - 25.0) <= 1.0 and abs(result["elevation_deg"] - 3.0) <= 1.0
-    assert result["quality"] > 0.99
-    left = [int(round(v)) for v in 4000 * fit.fingerprint(-20.0, 0.0) + 300]
-    mixed = sim_server._bank_with_directions({**frame, "levels_raw": left, "maps": 18}, None)["fit"]
-    assert -20.0 < mixed["azimuth_deg"] < 25.0
-    restarted = sim_server._bank_with_directions({**frame, "levels_raw": left, "maps": 1}, None)["fit"]
-    assert abs(restarted["azimuth_deg"] + 20.0) <= 1.0
-    assert sim_server._bank_with_directions(frame, "0000000000000000")["fit"] is None
-    assert sim_server._bank_with_directions({**frame, "levels_raw": None}, None)["fit"] is None
+    fit = {"azimuth_deg": 12.5, "elevation_deg": -3.0, "quality": 0.8, "sector": 24, "elapsed_us": 5000}
+    frame = {"rows": bank["rows"], "columns": bank["columns"], "levels_raw": [1000] * len(bank["azimuth_deg"]),
+             "maps": 3, "target": None, "fit": fit}
+    result = sim_server._bank_with_directions(frame)
+    assert result["fit"] == fit
+    assert result["azimuth_deg"] == [float(value) for value in bank["azimuth_deg"]]

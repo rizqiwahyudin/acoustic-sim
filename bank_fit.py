@@ -72,6 +72,11 @@ class BankFit:
     def beams(self) -> int:
         return self._delays_s.shape[0]
 
+    def unit_patterns(self) -> np.ndarray:
+        """What the fit correlates a map with: each template minus its mean, scaled to length 1 (directions x
+        beams, elevation-major as the grid). The MAX78002 runs the fit with these (bank_fit_table.h)."""
+        return self._centred / np.sqrt(self._norms)[:, None]
+
     def _patterns(self, azimuth_deg, elevation_deg) -> np.ndarray:
         """Band level of every beam for plane waves from these directions: directions x beams."""
         az, el = np.radians(azimuth_deg), np.radians(elevation_deg)

@@ -389,6 +389,7 @@ class DspParameterService:
         "channel": (0, 1, 0),
         "map_record": (0, 1, 0),
         "tone": (0, 10000, 0),
+        "fit": (0, 1, 1),
     }
 
     def __init__(self, loader=load_registry):

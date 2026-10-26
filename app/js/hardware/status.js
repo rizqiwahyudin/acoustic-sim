@@ -319,6 +319,14 @@ export class MeasurementPanel {
         finally { this.render(); }
       },
     });
+    this.aim = segmented([['1', 'Pattern fit'], ['0', 'Peak beam']], {
+      label: 'Live aim',
+      onPick: async (key) => {
+        this.aim.setDisabled(true);
+        try { await session.setSetting('fit', Number(key), 'Live aim'); }
+        finally { this.render(); }
+      },
+    });
     const input = (key, minimum, maximum, step) => {
       this.inputs[key] = h('input', {class: 'input input--mono input--sm', type: 'number', min: minimum, max: maximum, step, style: {width: '96px'}});
       return this.inputs[key];
@@ -341,6 +349,8 @@ export class MeasurementPanel {
         h('label', {}, 'Guard', input('guard_us', 0, 20000, 50), 'µs'),
         h('label', {}, 'Window', input('window_us', 1000, 100000, 500), 'µs'),
         this.apply),
+      h('div', {class: 'form'}, h('label', {title: 'Where Live steers the beam (Ch0): the pattern fit of the bank map, '
+        + 'or the peak bank beam'}, 'Live aim', this.aim.el)),
       h('p', {class: 'note'}, 'Settings change only while the device is stopped.'));
   }
 
@@ -349,6 +359,8 @@ export class MeasurementPanel {
     const idle = this.session.ready && this.session.firmwareMode === 'IDLE';
     this.mode.set(String(settings.measure ?? 0));
     this.mode.setDisabled(!idle);
+    this.aim.set(String(settings.fit ?? 0));
+    this.aim.setDisabled(!idle || settings.fit === undefined);
     for (const [key, input] of Object.entries(this.inputs)) {
       if (document.activeElement !== input && Number.isFinite(settings[key])) input.value = settings[key];
       input.disabled = !idle;

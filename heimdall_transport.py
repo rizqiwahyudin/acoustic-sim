@@ -14,6 +14,7 @@ import time
 from typing import Any
 import zlib
 
+from bank_fit import BankFit, BankFitStream
 from dsp_registry import DspParameterService, checksum
 from heimdall_bank import BankTracker, LOST_MAPS as BANK_LOST_MAPS, PERIOD_S as BANK_PERIOD_S
 from heimdall_protocol import FIRMWARE_SETTINGS, HeimdallState, ProtocolError
@@ -388,7 +389,8 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
                  sector_time_s: float = 0.0028, flight_profile: str = "crossing",
                  flight_speed: float = 1.0, clock=time.monotonic,
                  level_provider=None, program: DeployedProgram = DeployedProgram(),
-                 parameter_service: DspParameterService | None = None) -> None:
+                 parameter_service: DspParameterService | None = None,
+                 bank_fit: BankFit | None = None) -> None:
         HeimdallTransport.__init__(self, clock=clock)
         threading.Thread.__init__(self, daemon=True)
         if not 1 <= rows <= 20 or not 1 <= columns <= 20:
@@ -429,6 +431,9 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
         self.tracking_passes = 0
         self.confirm_passes = 0
         self.bank_tracker: BankTracker | None = None
+        # The firmware's pattern fit (bank_fit.c), when the contract has the bank's microphone delays.
+        self.bank_fit = bank_fit if bank_fit is not None and bank_fit.beams == program.bank_beams else None
+        self.bank_fit_stream: BankFitStream | None = None
         self.bank_has_target = False
         self.bank_lost_maps = 0
         self.bank_target_sector = 0
@@ -505,6 +510,8 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
                 list(self.program.bank_azimuth_deg), list(self.program.bank_elevation_deg),
                 self.azimuth_deg, self.elevation_deg,
             )
+            fit_on = self.parameter_service.settings(self).get("fit", 1) == 1
+            self.bank_fit_stream = BankFitStream(self.bank_fit) if fit_on and self.bank_fit else None
             self.bank_has_target = False
             self.bank_lost_maps = 0
             self.apply_line("SCAN_STARTED,B")
@@ -604,6 +611,8 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
         levels = [self._level_for_direction(azimuth, elevation)
                   for azimuth, elevation in zip(program.bank_azimuth_deg, program.bank_elevation_deg)]
         self.apply_line(f"LEVELS,B,{program.bank_rows},{program.bank_columns}," + ",".join(map(str, levels)))
+        if self.bank_fit_stream is not None:
+            self.bank_fit_stream.push(None, levels)
         result = self.bank_tracker.update(levels)
         if not result.beams:
             if self.bank_has_target:
@@ -613,6 +622,11 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
                     self.bank_has_target = False
             return
         self.bank_lost_maps = 0
+        fit = self.bank_fit_stream.result if self.bank_fit_stream is not None else None
+        if fit is not None:
+            result.sector = self.bank_tracker.nearest_sector(fit.azimuth_deg, fit.elevation_deg)
+            self.apply_line(f"BANK_FIT,{_format_angle(fit.azimuth_deg)},{_format_angle(fit.elevation_deg)},"
+                            f"{round(min(fit.quality, 1.0) * 1000)},{result.sector},0")
         listen = result.beams[1] if len(result.beams) > 1 else result.beams[0]
         self.apply_line(
             f"BANK_TARGET,{result.beams[0]},{listen},{_format_angle(result.azimuth_deg)},"
