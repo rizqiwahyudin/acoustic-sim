@@ -349,7 +349,7 @@ export class MeasurementPanel {
         h('label', {}, 'Guard', input('guard_us', 0, 20000, 50), 'µs'),
         h('label', {}, 'Window', input('window_us', 1000, 100000, 500), 'µs'),
         this.apply),
-      h('div', {class: 'form'}, h('label', {title: 'Where Live steers the beam (Ch0): the pattern fit of the bank map, '
+      h('div', {class: 'form'}, h('span', {class: 'pick', title: 'Where Live steers the beam (Ch0): the pattern fit of the bank map, '
         + 'or the peak bank beam'}, 'Live aim', this.aim.el)),
       h('p', {class: 'note'}, 'Settings change only while the device is stopped.'));
   }
