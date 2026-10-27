@@ -9,6 +9,7 @@ import { h, setText } from '../shared/dom.js';
 import { levelToUnit, rampColor, rgbCss } from '../shared/colormap.js';
 import { num } from '../shared/format.js';
 import { look } from '../shared/look.js';
+import { buildField, fieldKind, gateMarker } from '../hardware/field.js';
 import { operatingMode } from '../hardware/status.js';
 
 const FLOOR = -40;
@@ -73,6 +74,8 @@ export function createView(container, {session, navigate}) {
   let miniKey = '';
   let miniCells = [];
   let build = null;          // the full 3D build plays every time Present opens
+  let markerKind = null;
+  let markerState = null;
 
   import('../hardware/scene3d.js').then(({SectorScene}) => {
     scene = new SectorScene(stage, {theme: 'exhibit', beams: look === 'arasaka'});
@@ -117,6 +120,10 @@ export function createView(container, {session, navigate}) {
     const frame = session.frame;
     const cfg = frame?.configuration || session.configuration;
     const online = session.open;
+    if (!online) {
+      markerKind = null;
+      markerState = null;
+    }
     offline.hidden = online;
     controls.hidden = !online;
     corner.querySelector('.ex-mini').hidden = !cfg;
@@ -132,7 +139,29 @@ export function createView(container, {session, navigate}) {
     stopButton.setAttribute('aria-pressed', String(mode === 'idle'));
     for (const button of [liveButton, trackButton, scanButton, stopButton]) button.disabled = !session.ready || Boolean(session.studyRun);
 
-    const solution = session.solution(frame);
+    let solution = session.solution(frame);
+    if (frame?.levels_db) {
+      markerKind = fieldKind(frame, {previous: markerKind, monitoring: session.monitoring});
+      const field = buildField(frame, markerKind, {cellAge: (row, column) => session.cellAge(row, column)});
+      if (field) {
+        const gated = gateMarker(field, markerState);
+        markerState = gated.previous;
+        if (gated.marker) {
+          solution = {
+            ...solution,
+            kind: gated.marker.kind,
+            row: gated.marker.cell?.row,
+            column: gated.marker.cell?.column,
+            sector: gated.marker.cell?.index,
+            azimuth: gated.marker.azimuth,
+            elevation: gated.marker.elevation,
+            level: gated.marker.cell?.level ?? null,
+          };
+        } else if (gated.suppressed) {
+          solution = null;
+        }
+      }
+    }
     const showAnswer = solution && (solution.kind === 'target' || mode === 'continuous' || mode === 'once' || mode === 'fixed');
     if (showCount()) {
       // counting the microphones in (count below)
@@ -170,7 +199,7 @@ export function createView(container, {session, navigate}) {
       }
       // Idle motion while stopped; in the Beams display the glow wave also runs while searching, as the mockup.
       const searching = (mode === 'track' || mode === 'stare') && !showAnswer;
-      scene?.render(frame, {floor: FLOOR, session, idle: mode === 'idle', searching: display === 'beams' && searching});
+      scene?.render(frame, {floor: FLOOR, session, idle: mode === 'idle', searching: display === 'beams' && searching, marker: solution});
       if (build && scene && online) {
         scene.play(build);
         build = null;

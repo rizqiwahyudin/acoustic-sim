@@ -172,6 +172,24 @@ export function buildField(frame, kind, {cellAge = () => null, staleMs = 5000, d
   return kind === 'bank' ? bankField(frame, direction) : sectorField(frame, cellAge, staleMs);
 }
 
+/** Keep a displayed direction until its measured level is at least 5 dB above the field background. */
+export function gateMarker(field, previous = null, candidate = field?.marker) {
+  const held = previous?.key === field?.key ? previous : null;
+  const level = candidate?.cell?.level;
+  const qualifies = Number.isFinite(level) && Number.isFinite(field?.background) && level - field.background >= 5;
+  const next = qualifies
+    ? {key: field.key, marker: {...candidate, cellIndex: candidate.cell?.index ?? null}}
+    : held;
+  if (!next) return {marker: null, previous: null, suppressed: Boolean(candidate)};
+
+  const {cellIndex, ...marker} = next.marker;
+  return {
+    marker: {...marker, cell: Number.isInteger(cellIndex) ? field.cells[cellIndex] ?? null : null},
+    previous: next,
+    suppressed: Boolean(candidate && !qualifies && !held),
+  };
+}
+
 function fraction(edges, value) {
   const last = edges.length - 2;
   for (let i = 0; i <= last; i++) {

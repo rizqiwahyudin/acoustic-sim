@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { bankGrid, buildField, cellDirection, fieldKind, gridDirection, gridPosition, median, surfaceUnit } from '../js/hardware/field.js';
+import { bankGrid, buildField, cellDirection, fieldKind, gateMarker, gridDirection, gridPosition, median, surfaceUnit } from '../js/hardware/field.js';
 import { direction } from '../js/hardware/geometry.js';
 
 const STEP = 2 * Math.sin(40 * Math.PI / 180) / 5;
@@ -65,6 +65,32 @@ test('the bank marks a lock only, and measures the background as the median', ()
   const locked = buildField({bank: bank(levels, {beam: 19, azimuth_deg: 24, elevation_deg: 13})}, 'bank');
   assert.deepEqual([locked.marker.kind, locked.marker.azimuth, locked.marker.cell.index], ['target', 24, 19]);
   assert.equal(median([3, null, 1, 2, NaN]), 2);
+});
+
+test('the displayed direction moves only when its cell is at least 5 dB above background', () => {
+  const levels = Array.from({length: 5}, () => Array(5).fill(-36));
+  levels[3][4] = -32;
+  const quietInitial = buildField({bank: bank(levels, {beam: 19, azimuth_deg: 24, elevation_deg: 13})}, 'bank');
+  const rejected = gateMarker(quietInitial);
+  assert.equal(rejected.marker, null);
+  assert.equal(rejected.suppressed, true);
+
+  levels[3][4] = -31;
+  const first = buildField({bank: bank(levels, {beam: 19, azimuth_deg: 24, elevation_deg: 13})}, 'bank');
+  const accepted = gateMarker(first);
+  assert.equal(accepted.marker.cell.index, 19);
+
+  levels[3][4] = -32;
+  levels[3][2] = -8;
+  const quietMove = buildField({bank: bank(levels, {beam: 18, azimuth_deg: 15, elevation_deg: 10})}, 'bank');
+  const held = gateMarker(quietMove, accepted.previous);
+  assert.equal(held.marker.cell.index, 19);
+  assert.equal(held.marker.azimuth, 24);
+  assert.equal(held.suppressed, false);
+
+  levels[3][3] = -31;
+  const loudMove = buildField({bank: bank(levels, {beam: 18, azimuth_deg: 15, elevation_deg: 10})}, 'bank');
+  assert.equal(gateMarker(loudMove, held.previous).marker.cell.index, 18);
 });
 
 test('the Live direction can come from the pattern fit, but only for a firmware target', () => {

@@ -385,7 +385,7 @@ export class FieldScene {
     }
     if (look) { /* the hidden looks ring the target in its tile's halo */ }
     else if (tiles && marker?.cell) outline(marker.cell, marker.kind === 'beam' ? COLORS.accent : COLORS.marker);
-    else if (tiles && field.strongest) outline(field.strongest, COLORS.marker, 0.007);
+    else if (tiles && field.strongest && !field.markerSuppressed) outline(field.strongest, COLORS.marker, 0.007);
 
     if (marker && Number.isFinite(marker.azimuth) && Number.isFinite(marker.elevation)) {
       let reach = RADIUS * 0.985;

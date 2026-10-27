@@ -14,7 +14,7 @@ import { modeWord, scaleFill } from './lookparts.js';
 import { HistoryCharts } from './history.js';
 import { AudioPanel, DiagnosticsPanel, EventLog, ManualBeamPanel, MeasurementPanel, SourcePanel, TonePanel, operatingMode, sourceAnswer } from './status.js';
 import { AcousticScene, AuditionPanel, ConnectionPanel } from './connection.js';
-import { DIRECTIONS, buildField, fieldKind } from './field.js';
+import { DIRECTIONS, buildField, fieldKind, gateMarker } from './field.js';
 import { STALE_MS } from './session.js';
 import { dsp } from '../study/dsp.js';
 
@@ -53,7 +53,8 @@ export function createView(container, {session}) {
   if (!DIRECTIONS.some(([key]) => key === prefs.direction)) prefs.direction = 'firmware';
   session.direction = prefs.direction === 'fit' ? 'fit' : 'firmware';
   // build: the 3D build waiting to play once the 3D view is on screen ('full' the first time, 'quick' after).
-  const state = {visible: false, kind: null, field: null, hover: null, tab: null, build: null, built: false};
+  const state = {visible: false, kind: null, field: null, hover: null, tab: null, build: null, built: false,
+    marker: null, altMarker: null};
 
   const acoustic = new AcousticScene();
   const connection = new ConnectionPanel(session, acoustic);
@@ -400,12 +401,29 @@ export function createView(container, {session}) {
     renderRunLock();
     connectWrap.hidden = open;
     consoleEl.hidden = !open;
-    if (!open) return;
+    if (!open) {
+      state.marker = null;
+      state.altMarker = null;
+      return;
+    }
     const frame = session.frame;
     const mode = operatingMode(session);
     state.kind = fieldKind(frame, {previous: state.kind, monitoring: session.monitoring});
     const field = buildField(frame, state.kind, {cellAge: (row, column) => session.cellAge(row, column), staleMs: STALE_MS,
       direction: prefs.direction});
+    if (field) {
+      const marker = gateMarker(field, state.marker);
+      state.marker = marker.previous;
+      field.marker = marker.marker;
+      field.markerSuppressed = marker.suppressed;
+      if (field.alt) {
+        const alt = gateMarker(field, state.altMarker, field.alt);
+        state.altMarker = alt.previous;
+        field.alt = alt.marker;
+      } else {
+        state.altMarker = null;
+      }
+    }
     state.field = field;
     const answer = sourceAnswer(session, field, mode);
 

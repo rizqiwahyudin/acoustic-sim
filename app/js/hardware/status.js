@@ -49,6 +49,14 @@ export function sourceAnswer(session, field, mode) {
     return {tag: 'LOCKED', tone: 'accent', azimuth: marker.azimuth, elevation: marker.elevation,
       level, margin: above(level), lockedMs: session.lockedForMs};
   }
+  if (field?.marker) {
+    const marker = field.marker;
+    const level = marker.cell?.level ?? null;
+    const tag = marker.kind === 'target' ? 'LOCKED' : 'HOLDING';
+    return {tag, tone: 'accent', azimuth: marker.azimuth, elevation: marker.elevation,
+      level, margin: above(level), lockedMs: marker.kind === 'target' ? session.lockedForMs : null};
+  }
+  if (field?.markerSuppressed) return {tag: mode === 'track' ? 'SEARCHING' : 'IDLE', tone: ''};
   const answer = session.solution(session.frame);
   if (!answer) return {tag: mode === 'track' ? 'SEARCHING' : mode === 'idle' ? 'IDLE' : 'SCANNING', tone: ''};
   const tag = {target: 'LOCKED', beam: 'HOLDING'}[answer.kind] || 'STRONGEST';

@@ -120,7 +120,7 @@ export class FieldMap {
     this.ticks.replaceChildren(...[0, 0.25, 0.5, 0.75, 1].map((f) => h('li', {}, f === 0 ? '0 dBFS' : num(floor * f, 0))));
 
     const marker = field.marker;
-    const highlight = marker?.cell ?? field.strongest;
+    const highlight = marker?.cell ?? (field.markerSuppressed ? null : field.strongest);
     const showText = this.cellPx >= LABEL_MIN_CELL;
     for (const cell of field.cells) {
       const entry = this.cells[cell.index];

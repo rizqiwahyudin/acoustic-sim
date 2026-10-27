@@ -369,7 +369,7 @@ export class SectorScene {
   }
 
   /** state: {floor, session, idle: nothing running, searching: the glow wave alone (the hidden looks' motion)} */
-  render(frame, {floor, session, idle = false, searching = false}) {
+  render(frame, {floor, session, idle = false, searching = false, marker: markerOverride} = {}) {
     const cfg = frame?.configuration;
     if (!cfg || !frame.levels_db || !frame.azimuth_deg?.length || !frame.elevation_deg?.length) return;
     this.motion?.setIdle(idle, idle || searching);
@@ -379,7 +379,7 @@ export class SectorScene {
     const target = frame.target;
     const steer = !target ? frame.last_steer : null;
     const strongest = !target && !steer ? session.strongest(frame) : null;
-    const marker = target || steer || strongest;
+    const marker = markerOverride === undefined ? target || steer || strongest : markerOverride;
     const pixel = Math.max(1, Math.round(this.viewport.renderer.getPixelRatio()));
     const beams = this.display === 'beams';
     this.rays.visible = beams;
@@ -426,7 +426,7 @@ export class SectorScene {
       const {row, column} = this.tileMeshes[this.hover]?.userData || {};
       if (row !== undefined) outline(row, column, this.colors.text);
     }
-    if (steer) outline(steer.row, steer.column, this.colors.accent, true);
+    if (marker?.kind === 'beam') outline(marker.row, marker.column, this.colors.accent, true);
     if (marker && beams) {
       // In the Beams display the target's own ray, in ink, is the pointer.
       const hot = this.rayParts[this.tileMeshes.findIndex((m) => m.userData.row === marker.row && m.userData.column === marker.column)];
