@@ -50,8 +50,10 @@ export function createView(container, {session}) {
   const prefs = {view: '3d', camera: 'behind', style: 'tiles', floor: -40, values: 'strongest', log: 'open', ...loadPrefs()};
   if (!['3d', 'map'].includes(prefs.view)) prefs.view = '3d';
   if (!STYLES.some(([key]) => key === prefs.style)) prefs.style = 'tiles';
-  if (!DIRECTIONS.some(([key]) => key === prefs.direction)) prefs.direction = 'firmware';
-  session.direction = prefs.direction === 'fit' ? 'fit' : 'firmware';
+  // Saved as 'direction' while Peak was the default; Fit is the default now.
+  delete prefs.direction;
+  if (!DIRECTIONS.some(([key]) => key === prefs.liveDirection)) prefs.liveDirection = 'fit';
+  session.direction = prefs.liveDirection === 'fit' ? 'fit' : 'firmware';
   // build: the 3D build waiting to play once the 3D view is on screen ('full' the first time, 'quick' after).
   const state = {visible: false, kind: null, field: null, hover: null, tab: null, build: null, built: false,
     marker: null, altMarker: null};
@@ -129,11 +131,11 @@ export function createView(container, {session}) {
   const stylePick = h('label', {class: 'pick'}, 'Show', styleSelect);
   const directionSeg = segmented(DIRECTIONS, {
     label: 'Live direction', onPick: (key) => {
-      prefs.direction = key; savePrefs(prefs); directionSeg.set(key);
+      prefs.liveDirection = key; savePrefs(prefs); directionSeg.set(key);
       session.direction = key === 'fit' ? 'fit' : 'firmware'; render(true);
     },
   });
-  directionSeg.set(prefs.direction);
+  directionSeg.set(prefs.liveDirection);
   const directionPick = h('span', {class: 'pick', title: 'Live direction, both computed on the board: the peak beam, the pattern fit '
     + '(all beams fitted to the expected pattern; the peak still decides if there is a target), or both (the fit as a ring). '
     + 'Which one steers the beam is the Live aim setting.'},
@@ -410,7 +412,7 @@ export function createView(container, {session}) {
     const mode = operatingMode(session);
     state.kind = fieldKind(frame, {previous: state.kind, monitoring: session.monitoring});
     const field = buildField(frame, state.kind, {cellAge: (row, column) => session.cellAge(row, column), staleMs: STALE_MS,
-      direction: prefs.direction});
+      direction: prefs.liveDirection});
     if (field) {
       const marker = gateMarker(field, state.marker);
       state.marker = marker.previous;

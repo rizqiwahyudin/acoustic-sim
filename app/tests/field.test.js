@@ -97,8 +97,9 @@ test('the Live direction can come from the pattern fit, but only for a firmware 
   const target = {beam: 19, azimuth_deg: 24, elevation_deg: 13};
   const fit = {azimuth_deg: -20, elevation_deg: -2, quality: 0.8};
   const frame = (withTarget) => ({bank: {...bank(null, withTarget ? target : null), fit}});
-  const own = buildField(frame(true), 'bank');
+  const own = buildField(frame(true), 'bank', {direction: 'firmware'});
   assert.deepEqual([own.marker.source, own.marker.azimuth, own.alt], ['firmware', 24, null]);
+  assert.equal(buildField(frame(true), 'bank').marker.source, 'fit');
   const fitted = buildField(frame(true), 'bank', {direction: 'fit'});
   assert.deepEqual([fitted.marker.source, fitted.marker.azimuth, fitted.marker.cell.index], ['fit', -20, 11]);
   const both = buildField(frame(true), 'bank', {direction: 'both'});

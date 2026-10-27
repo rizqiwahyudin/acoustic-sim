@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -22,13 +23,17 @@ def maps(seed=1, count=400):
     return levels
 
 
-def test_default_replay_is_the_firmware_tracker():
+@pytest.mark.parametrize("settings", [{}, {"freeze_maps": 0}, {"freeze_maps": 5}])
+def test_default_replay_is_the_firmware_tracker(settings):
     zeros = [0.0] * 49
-    tracker = BankTracker(7, 7, zeros, zeros, zeros[:7], zeros[:7])
-    detector = live_log.Detector()
-    for levels in maps():
-        expected = tracker.update([int(v) for v in levels]).beams
-        assert detector.update(levels)[0] == (expected[0] if expected else -1)
+    tracker = BankTracker(7, 7, zeros, zeros, zeros[:7], zeros[:7], **settings)
+    detector = live_log.Detector(**settings)
+    levels = maps()
+    levels[250:330, 24] *= 6  # a source held for 4 s
+    for row in levels:
+        expected = tracker.update([int(v) for v in row]).beams
+        assert detector.update(row)[0] == (expected[0] if expected else -1)
+    assert [int(v) for v in detector.background] == tracker.background
 
 
 def test_integer_background_stops_short_of_the_level():

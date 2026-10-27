@@ -25,6 +25,7 @@ FIRMWARE_SETTINGS = {
     "map_record": (0, 1, 0),
     "tone": (0, 10000, 0),
     "fit": (0, 1, 1),
+    "freeze_s": (0, 600, 60),
 }
 
 # How the board is turned, seen from behind (beamforming_mathematics/array_mount.py).
@@ -623,6 +624,10 @@ class HeimdallState:
             self._validate_grid_position(record)
             self._learn_angles(record)
             self.target = None if record_type == "target_lost" else record
+            if record_type == "target_lost":
+                # Live: the last bank target and fit belong to the lost target.
+                self.bank_target = None
+                self.bank_fit = None
         elif record_type in {"error", "steer_error"}:
             self.last_error = record
         elif record_type == "audio_ready":

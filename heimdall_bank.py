@@ -5,6 +5,8 @@ its own slow background and the map's median, and no 4-neighbour is louder. The 
 candidate's direction is the excess-weighted centroid of its 3 x 3 neighbourhood in
 sine space, and the steered beam goes to the nearest sector. Backgrounds carry
 FRACTION_BITS fraction bits; levels at or below LEVEL_FLOOR are never candidates.
+A beam above its background keeps it for freeze_maps maps (the freeze_s setting),
+then adapts with HELD_SHIFT.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ FRACTION_BITS = 8
 LEVEL_FLOOR = 4
 LOST_MAPS = 10
 PERIOD_S = 0.05
+FREEZE_S = 60  # default of the freeze_s setting
+FREEZE_MAPS = round(FREEZE_S / PERIOD_S)
 
 
 @dataclass
@@ -38,15 +42,19 @@ def _above(level: int, reference: int) -> bool:
 
 class BankTracker:
     def __init__(self, rows: int, columns: int, azimuth_deg: list[float], elevation_deg: list[float],
-                 sector_azimuth_deg: list[float], sector_elevation_deg: list[float]) -> None:
+                 sector_azimuth_deg: list[float], sector_elevation_deg: list[float],
+                 freeze_maps: int = FREEZE_MAPS) -> None:
         self.rows, self.columns = rows, columns
         self.azimuth_deg, self.elevation_deg = list(azimuth_deg), list(elevation_deg)
         self.sector_azimuth_deg, self.sector_elevation_deg = list(sector_azimuth_deg), list(sector_elevation_deg)
+        self.freeze_maps = freeze_maps
         self.background: list[int] | None = None
+        self.held_maps: list[int] = []
 
     def update(self, levels: list[int]) -> BankResult:
         if self.background is None:
             self.background = [level << FRACTION_BITS for level in levels]
+            self.held_maps = [0] * len(levels)
             return BankResult([], [])
         field = sorted(levels)[len(levels) // 2] << FRACTION_BITS
         above = [_above(level, bg) and _above(level, field) for level, bg in zip(levels, self.background)]
@@ -57,7 +65,14 @@ class BankTracker:
             result.azimuth_deg, result.elevation_deg = self._interpolate(levels, result.beams[0])
             result.sector = self.nearest_sector(result.azimuth_deg, result.elevation_deg)
         for beam, level in enumerate(levels):
-            shift = HELD_SHIFT if above[beam] else BACKGROUND_SHIFT
+            shift = BACKGROUND_SHIFT
+            if above[beam]:
+                if self.held_maps[beam] < self.freeze_maps:
+                    self.held_maps[beam] += 1
+                    continue
+                shift = HELD_SHIFT
+            else:
+                self.held_maps[beam] = 0
             difference = (level << FRACTION_BITS) - self.background[beam]
             step = difference >> shift if difference >= 0 else -((-difference) >> shift)
             self.background[beam] += step

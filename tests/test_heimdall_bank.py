@@ -128,10 +128,10 @@ def test_stare_and_output_commands_validate():
             validate_command(command)
 
 
-def tracker():
+def tracker(freeze_maps=0):
     azimuth, elevation = bank_angles()
     sector_angles = [-34.3, -22.9, -11.4, 0.0, 11.4, 22.9, 34.3]
-    return BankTracker(5, 5, azimuth, elevation, sector_angles, sector_angles)
+    return BankTracker(5, 5, azimuth, elevation, sector_angles, sector_angles, freeze_maps=freeze_maps)
 
 
 def test_tracker_primes_then_finds_a_single_source():
@@ -172,6 +172,46 @@ def test_tracker_background_follows_slowly_while_held():
     assert bank.background[0] >> FRACTION_BITS == 1000
 
 
+def test_tracker_freeze_keeps_a_held_background_then_adapts_slowly():
+    bank = tracker(freeze_maps=20)
+    bank.update([1000] * 25)
+    levels = [1000] * 25
+    levels[12] = 4000
+    for _ in range(20):
+        assert bank.update(levels).beams == [12]
+        assert bank.background[12] == 1000 << FRACTION_BITS
+    bank.update(levels)
+    assert 1000 < bank.background[12] >> FRACTION_BITS < 1100
+    # A quiet map ends the hold, so the next hold starts a new freeze.
+    assert bank.update([1000] * 25).beams == []
+    assert bank.held_maps[12] == 0
+
+
+def test_emulator_stare_takes_the_freeze_from_the_settings():
+    emulator = ScriptedBankEmulator(bank_program())
+    emulator._handle_command("B")
+    assert emulator.bank_tracker.freeze_maps == 1200
+    emulator.parameter_service._settings["freeze_s"] = 0
+    emulator._handle_command("B")
+    assert emulator.bank_tracker.freeze_maps == 0
+
+
+def test_target_lost_clears_the_bank_target_and_fit():
+    state = HeimdallState()
+    state.apply_line("READY,2D,7,7,49,44")
+    state.apply_line("BANK,5,5,12000")
+    state.apply_line("SCAN_STARTED,B")
+    state.apply_line("BANK_FIT,12.5000,-3.2500,812,31,4870")
+    state.apply_line("BANK_TARGET,12,13,1.5000,-2.0000,24,16777216")
+    state.apply_line("TARGET_ACQUIRED,24,3,3,0.0000,0.0000,1000")
+    bank = state.snapshot()["bank"]
+    assert bank["target"] is not None and bank["fit"] is not None
+    state.apply_line("TARGET_LOST,24,3,3,0.0000,0.0000,10")
+    bank = state.snapshot()["bank"]
+    assert bank["target"] is None and bank["fit"] is None
+    assert state.snapshot()["mode"] == "B"
+
+
 def test_emulator_stare_reports_maps_target_and_listening_beam():
     emulator = ScriptedBankEmulator(bank_program())
     snapshot = emulator.snapshot()
@@ -195,6 +235,7 @@ def test_emulator_stare_reports_maps_target_and_listening_beam():
     for _ in range(LOST_MAPS):
         emulator._stare_cycle()
     assert emulator.snapshot()["target"] is None
+    assert emulator.snapshot()["bank"]["target"] is None
 
 
 def test_emulator_without_a_bank_refuses_stare_and_outputs():

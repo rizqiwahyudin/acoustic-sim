@@ -168,7 +168,7 @@ function sectorField(frame, cellAge, staleMs) {
   };
 }
 
-export function buildField(frame, kind, {cellAge = () => null, staleMs = 5000, direction = 'firmware'} = {}) {
+export function buildField(frame, kind, {cellAge = () => null, staleMs = 5000, direction = 'fit'} = {}) {
   return kind === 'bank' ? bankField(frame, direction) : sectorField(frame, cellAge, staleMs);
 }
 

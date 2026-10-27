@@ -16,7 +16,7 @@ import zlib
 
 from bank_fit import BankFit, BankFitStream
 from dsp_registry import DspParameterService, checksum
-from heimdall_bank import BankTracker, LOST_MAPS as BANK_LOST_MAPS, PERIOD_S as BANK_PERIOD_S
+from heimdall_bank import BankTracker, FREEZE_S as BANK_FREEZE_S, LOST_MAPS as BANK_LOST_MAPS, PERIOD_S as BANK_PERIOD_S
 from heimdall_protocol import FIRMWARE_SETTINGS, HeimdallState, ProtocolError
 
 
@@ -505,12 +505,14 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
                 self.apply_line("ERR,MALFORMED_COMMAND")
                 return
             self.mode = "B"
+            settings = self.parameter_service.settings(self)
             self.bank_tracker = BankTracker(
                 self.program.bank_rows, self.program.bank_columns,
                 list(self.program.bank_azimuth_deg), list(self.program.bank_elevation_deg),
                 self.azimuth_deg, self.elevation_deg,
+                freeze_maps=round(settings.get("freeze_s", BANK_FREEZE_S) / BANK_PERIOD_S),
             )
-            fit_on = self.parameter_service.settings(self).get("fit", 1) == 1
+            fit_on = settings.get("fit", 1) == 1
             self.bank_fit_stream = BankFitStream(self.bank_fit) if fit_on and self.bank_fit else None
             self.bank_has_target = False
             self.bank_lost_maps = 0

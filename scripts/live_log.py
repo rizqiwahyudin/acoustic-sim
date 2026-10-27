@@ -1,8 +1,9 @@
 """Live (bank) logs: save, load, replay the firmware's detector with other settings, and analyse.
 
-    python scripts/live_log.py <folder> [old] [--speaker AZ EL]
+    python scripts/live_log.py <folder> [old|nofreeze] [--speaker AZ EL]
         analyses l7_maps.npz and/or l5_maps.npz in the folder; writes live_log.json. 'old': the log was made with
-        the detector before 2026-10-23 (integer backgrounds, no level floor). --speaker: the speaker's direction
+        the detector before 2026-10-23 (integer backgrounds, no level floor); 'nofreeze': before 2026-10-27 (no
+        freeze_s). --speaker: the speaker's direction
         (deg), to score the firmware target and the pattern fit (bank_fit.py) against it.
 
 A run is the maps of one Live start (B). The replay is exact only when the log has every map from the start (the
@@ -22,14 +23,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bank_fit import BankFit, BankFitStream  # noqa: E402
 from heimdall_acoustic import default_contract_path  # noqa: E402
+from heimdall_bank import FREEZE_MAPS  # noqa: E402
 
 ROWS = COLUMNS = 7
 MAP_S = 0.05  # HEIMDALL_BANK_PERIOD_US
 ON_TARGET_DEG = 12.5  # about one bank cell
 FAR_JUMP_DEG = 20.0
-OLD_FIRMWARE = {"frac_bits": 0, "floor": 0}
+OLD_FIRMWARE = {"frac_bits": 0, "floor": 0, "freeze_maps": 0}
+NO_FREEZE = {"freeze_maps": 0}  # firmware before freeze_s (2026-10-27)
 SETTINGS = {
-    "firmware (1.5x, 8 fraction bits, floor 4)": {},
+    "firmware (1.5x, 8 fraction bits, floor 4, freeze 60 s)": {},
+    "no freeze": NO_FREEZE,
     "old firmware (integer background, floor 0)": OLD_FIRMWARE,
     "floor 8 words": {"floor": 8},
     "ratio 2x": {"ratio": (2, 1)},
@@ -65,16 +69,18 @@ def load_log(path):
 
 class Detector:
     """MAX78002/beam_bank.c with its settings as parameters. With the defaults it is the firmware, bit for bit
-    (OLD_FIRMWARE: before 2026-10-23). frac_bits: fraction bits of the backgrounds; floor: a level must be above it;
+    (NO_FREEZE: before 2026-10-27, OLD_FIRMWARE: before 2026-10-23). frac_bits: fraction bits of the backgrounds;
+    floor: a level must be above it; freeze_maps: a beam above its background keeps it this many maps in a row;
     confirm reports a target only when a candidate was found in that many maps in a row, each within one row and
     column of the one before; rise_shift makes a quiet beam's background rise more slowly than it falls."""
 
-    def __init__(self, ratio=(3, 2), shift=5, held_shift=9, frac_bits=8, confirm=1, rise_shift=None, floor=4):
+    def __init__(self, ratio=(3, 2), shift=5, held_shift=9, frac_bits=8, confirm=1, rise_shift=None, floor=4,
+                 freeze_maps=FREEZE_MAPS):
         self.num, self.den = ratio
         self.shift, self.held_shift, self.frac, self.confirm = shift, held_shift, frac_bits, confirm
         self.rise_shift = shift if rise_shift is None else rise_shift
-        self.floor = floor
-        self.background = None
+        self.floor, self.freeze_maps = floor, freeze_maps
+        self.background = self.held = None
         self.streak, self.last = 0, -1
 
     def above(self, levels, reference):
@@ -86,6 +92,7 @@ class Detector:
         levels = np.asarray(levels, np.int64)
         if self.background is None:
             self.background = levels << self.frac
+            self.held = np.zeros(len(levels), np.int64)
             return -1, -1
         field = int(np.sort(levels)[len(levels) // 2]) << self.frac
         above = self.above(levels, self.background) & self.above(levels, field)
@@ -101,7 +108,10 @@ class Detector:
                 best, best_ratio = int(beam), ratio
         difference = (levels << self.frac) - self.background
         shift = np.where(above, self.held_shift, np.where(difference > 0, self.rise_shift, self.shift))
-        self.background = self.background + np.where(difference >= 0, difference >> shift, -((-difference) >> shift))
+        step = np.where(difference >= 0, difference >> shift, -((-difference) >> shift))
+        frozen = above & (self.held < self.freeze_maps)
+        self.held = np.where(frozen, self.held + 1, np.where(above, self.held, 0))
+        self.background = self.background + np.where(frozen, 0, step)
         near = best >= 0 and self.last >= 0 and all(abs(a - b) <= 1 for a, b in zip(divmod(best, COLUMNS),
                                                                                    divmod(self.last, COLUMNS)))
         self.streak = 0 if best < 0 else (self.streak + 1 if near or self.streak == 0 else 1)
@@ -142,8 +152,8 @@ def rate(best, keep):
 
 
 def analyse(folder, firmware=None, speaker=None):
-    """firmware: the detector settings of the board that made the log ({} = now, OLD_FIRMWARE = before 23 Oct).
-    speaker: (azimuth, elevation) in degrees, when known."""
+    """firmware: the detector settings of the board that made the log ({} = now, NO_FREEZE = before 27 Oct,
+    OLD_FIRMWARE = before 23 Oct). speaker: (azimuth, elevation) in degrees, when known."""
     folder = Path(folder)
     result = {}
     for name in ("l7", "l5"):
@@ -302,7 +312,8 @@ def directions(runs):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("folder")
-    parser.add_argument("old", nargs="?", choices=["old"])
+    parser.add_argument("old", nargs="?", choices=["old", "nofreeze"],
+                        help="the log is from firmware before 23 Oct (old) or before 27 Oct (nofreeze)")
     parser.add_argument("--speaker", type=float, nargs=2, metavar=("AZ", "EL"))
     args = parser.parse_args()
-    analyse(args.folder, OLD_FIRMWARE if args.old else {}, args.speaker)
+    analyse(args.folder, {"old": OLD_FIRMWARE, "nofreeze": NO_FREEZE}.get(args.old, {}), args.speaker)
