@@ -604,13 +604,18 @@ def bank_prediction(bank, contract, az, el, distance_m):
 
 
 def live_trial(session, sound, listen):
-    """Stare starts in silence (its background), the sound plays; median target over the last 4 s."""
-    board, found = session.board, []
+    """Stare starts in silence (its background), the sound plays; median over the last 4 s of the peak beam
+    (BANK_TARGET) and of the pattern fit (BANK_FIT, while there is a target): {"peak": (az, el) or None, "fit": ...}."""
+    board, found, fitted = session.board, [], []
 
     def collect(state):
-        target = (state.get("bank") or {}).get("target")
+        bank = state.get("bank") or {}
+        target, fit = bank.get("target"), bank.get("fit")
         if state.get("firmware_mode") == "B" and target:
-            found.append((time.monotonic(), float(target["azimuth_deg"]), float(target["elevation_deg"])))
+            now = time.monotonic()
+            found.append((now, float(target["azimuth_deg"]), float(target["elevation_deg"])))
+            if fit:
+                fitted.append((now, float(fit["azimuth_deg"]), float(fit["elevation_deg"])))
         return False
 
     board.stop()
@@ -621,8 +626,23 @@ def live_trial(session, sound, listen):
     board.pump(listen, collect)
     board.stop()
     session.sound(None)
-    late = [(a, e) for t, a, e in found if t >= end - 4.0]
-    return (float(np.median([a for a, _ in late])), float(np.median([e for _, e in late]))) if late else None
+
+    def median(points):
+        late = [(a, e) for t, a, e in points if t >= end - 4.0]
+        return (float(np.median([a for a, _ in late])), float(np.median([e for _, e in late]))) if late else None
+
+    return {"peak": median(found), "fit": median(fitted)}
+
+
+def live_summary(hits, truth_sigma):
+    """Median, spread and uncertainty of the trial directions (an array of (az, el)) at one position."""
+    out = {"median_az": float(np.median(hits[:, 0])), "median_el": float(np.median(hits[:, 1])),
+           "spread_az": float(np.subtract(*np.percentile(hits[:, 0], [75, 25]))),
+           "spread_el": float(np.subtract(*np.percentile(hits[:, 1], [75, 25])))}
+    for axis, key in (("az", 0), ("el", 1)):
+        se = 1.253 * np.std(hits[:, key], ddof=1) / np.sqrt(len(hits)) if len(hits) > 1 else 0.0
+        out[f"sigma_{axis}"] = float(np.hypot(se, truth_sigma[key]))
+    return out
 
 
 def l1(session, args, out, array):
@@ -636,8 +656,11 @@ def l1(session, args, out, array):
             distance = place(nominal[0], nominal[1], args.distance)
         else:
             az, el, distance = ask_position(nominal[0], nominal[1], args.distance)
-        trials = [live_trial(session, args.sound, args.listen) for _ in range(args.trials)]
+        results = [live_trial(session, args.sound, args.listen) for _ in range(args.trials)]
+        trials = [r["peak"] for r in results]
+        fit_trials = [r["fit"] for r in results]
         hits = np.array([t for t in trials if t])
+        fit_hits = np.array([t for t in fit_trials if t])
         if args.truth == "array":
             centre = (float(np.median(hits[:, 0])), float(np.median(hits[:, 1]))) if len(hits) else nominal
             with session.settings(**MCU_BEAM):
@@ -648,15 +671,14 @@ def l1(session, args, out, array):
             float("nan"), float("nan"))
         row = {"true_az": az, "true_el": el, "distance_m": distance, "truth": args.truth,
                "truth_sigma_deg": list(truth_sigma), "predicted_az": predicted[0],
-               "predicted_el": predicted[1], "trials": trials, "detected": len(hits) / len(trials)}
+               "predicted_el": predicted[1], "trials": trials, "detected": len(hits) / len(trials),
+               "fit_trials": fit_trials}
+        if len(fit_hits):
+            row.update({f"fit_{key}": value for key, value in live_summary(fit_hits, truth_sigma).items()})
         if len(hits):
-            row.update({"median_az": float(np.median(hits[:, 0])), "median_el": float(np.median(hits[:, 1])),
-                        "spread_az": float(np.subtract(*np.percentile(hits[:, 0], [75, 25]))),
-                        "spread_el": float(np.subtract(*np.percentile(hits[:, 1], [75, 25])))})
-            for axis, key in (("az", 0), ("el", 1)):
-                se = 1.253 * np.std(hits[:, key], ddof=1) / np.sqrt(len(hits)) if len(hits) > 1 else 0.0
-                row[f"sigma_{axis}"] = float(np.hypot(se, truth_sigma[key]))
-            print(f"  true {az:+.1f}, {el:+.1f}: Live {row['median_az']:+.1f}, {row['median_el']:+.1f}; "
+            row.update(live_summary(hits, truth_sigma))
+            fit_text = (f"; fit {row['fit_median_az']:+.1f}, {row['fit_median_el']:+.1f}" if len(fit_hits) else "")
+            print(f"  true {az:+.1f}, {el:+.1f}: Live {row['median_az']:+.1f}, {row['median_el']:+.1f}{fit_text}; "
                   f"predicted {predicted[0]:+.1f}, {predicted[1]:+.1f}; detected {row['detected']:.0%}", flush=True)
         rows.append(row)
     detected = [r for r in rows if "median_az" in r and np.isfinite([r["true_az"], r["true_el"]]).all()]
@@ -676,6 +698,11 @@ def l1(session, args, out, array):
     if errors:
         session.report.info("L1 error vs true position", f"median {np.median(errors):.1f} deg, largest "
                                                           f"{np.max(errors):.1f} deg")
+    fit_errors = [np.hypot(r["fit_median_az"] - r["true_az"], r["fit_median_el"] - r["true_el"])
+                  for r in rows if "fit_median_az" in r and np.isfinite([r["true_az"], r["true_el"]]).all()]
+    if fit_errors:
+        session.report.info("L1 pattern fit error vs true position", f"median {np.median(fit_errors):.1f} deg, "
+                                                                      f"largest {np.max(fit_errors):.1f} deg")
     session.values["l1"] = {"sound": args.sound, "positions": rows}
     figure_live(rows, out)
 
@@ -834,7 +861,12 @@ def figure_live(rows, out):
             continue
         x = np.array([r[true] for r in data])
         ax.errorbar(x, [r[f"median_{axis}"] - r[true] for r in data], yerr=[r[f"sigma_{axis}"] for r in data],
-                    fmt="o", color="k", label="Live, median of trials")
+                    fmt="o", color="k", label="Live peak beam, median of trials")
+        fitted = [r for r in data if f"fit_median_{axis}" in r]
+        if fitted:
+            ax.errorbar([r[true] + 0.6 for r in fitted], [r[f"fit_median_{axis}"] - r[true] for r in fitted],
+                        yerr=[r[f"fit_sigma_{axis}"] for r in fitted], fmt="^", color="tab:blue",
+                        label="Live pattern fit, median of trials")
         ax.plot(x, [r[f"predicted_{axis}"] - r[true] for r in data], "s--", mfc="none",
                 label="predicted: firmware centroid on theory levels")
         ax.axhline(0, color="gray", lw=0.8)

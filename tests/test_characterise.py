@@ -279,3 +279,34 @@ def test_d1_runs_on_a_model_detector(monkeypatch, tmp_path):
     assert ("D1 time constant against the TCONST word", True) in [row[:2] for row in session.report.rows]
     assert {r["timing"] for r in result["readings"]} == {"firmware", "host"}
     assert (tmp_path / "d1_detector_decay.png").exists()
+
+
+class LiveBoard:
+    """Live frames every 50 ms: the peak beam (and the pattern fit when given) once the sound plays."""
+
+    def __init__(self, fit):
+        self.now, self.fit, self.sound_on = 0.0, fit, False
+
+    def stop(self):
+        pass
+
+    def command(self, text):
+        pass
+
+    def pump(self, seconds, until=None):
+        end = self.now + seconds
+        while self.now < end - 1e-9:
+            self.now += 0.05
+            bank = {"target": {"azimuth_deg": 10.0, "elevation_deg": 0.0}, "fit": self.fit} if self.sound_on else {}
+            if until is not None:
+                until({"firmware_mode": "B", "bank": bank})
+
+
+@pytest.mark.parametrize("fit", [{"azimuth_deg": 12.0, "elevation_deg": 1.0}, None])
+def test_live_trial_reports_the_peak_beam_and_the_fit(monkeypatch, fit):
+    board = LiveBoard(fit)
+    session = type("Session", (), {"board": board, "sound": lambda self, s: setattr(board, "sound_on", s is not None)})()
+    monkeypatch.setattr(characterise, "time", type("Clock", (), {"monotonic": staticmethod(lambda: board.now)}))
+    result = characterise.live_trial(session, "A", 8.0)
+    assert result["peak"] == (10.0, 0.0)
+    assert result["fit"] == ((12.0, 1.0) if fit else None)
