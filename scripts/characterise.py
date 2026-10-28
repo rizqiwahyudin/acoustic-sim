@@ -319,12 +319,17 @@ def ask_position(nominal_az, nominal_el, distance_m):
     """Tell the operator where the speaker goes; return the measured (azimuth, elevation, distance)."""
     a, e = np.radians(nominal_az), np.radians(nominal_el)
     x, z, h = distance_m * np.cos(e) * np.sin(a), distance_m * np.cos(e) * np.cos(a), distance_m * np.sin(e)
-    print(f"\nSpeaker to az {nominal_az:g}, el {nominal_el:g}: driver {100 * x:.1f} cm right, {100 * z:.1f} cm "
-          f"forward, {100 * h:.1f} cm up from the array centre, facing the array.", flush=True)
-    measured = ask_numbers("Measured right, forward, up in cm (Enter = as above): ", 3, optional=True)
+    print(f"\nSpeaker to az {nominal_az:g}, el {nominal_el:g} (seen from behind the array: + az = right, + el = up): "
+          f"driver {abs(100 * x):.1f} cm to the {'right' if x >= 0 else 'left'}, {100 * z:.1f} cm forward, "
+          f"{abs(100 * h):.1f} cm {'up' if h >= 0 else 'down'} from the array centre, facing the array.", flush=True)
+    measured = ask_numbers("Measured right, forward, up in cm (left and down are negative; Enter = as above): ", 3,
+                           optional=True)
     if measured:
         x, z, h = (v / 100.0 for v in measured)
-    return position_angles(x, z, h)
+    az, el, distance = position_angles(x, z, h)
+    print(f"  recorded: az {az:+.1f} deg ({'right' if az >= 0 else 'left'}), el {el:+.1f} deg, {distance:.2f} m",
+          flush=True)
+    return az, el, distance
 
 
 def position_angles(right_m, forward_m, up_m):
