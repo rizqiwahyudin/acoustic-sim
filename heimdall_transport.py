@@ -121,8 +121,12 @@ class HeimdallTransport:
         self.response_condition = threading.Condition(self.lock)
         self.response_sequence = 0
         self.response_records: deque[tuple[int, dict[str, Any]]] = deque(maxlen=64)
+        # heimdall_telemetry.TelemetryLog, when the session is logged.
+        self.telemetry = None
 
     def apply_line(self, line: str) -> dict[str, Any] | None:
+        if self.telemetry is not None:
+            self.telemetry.received(line)
         try:
             with self.response_condition:
                 record = self.state.apply_line(line)
@@ -252,6 +256,8 @@ class SerialHeimdallTransport(HeimdallTransport, threading.Thread):
 
     def send_command(self, command: str) -> None:
         command = validate_command(command)
+        if self.telemetry is not None:
+            self.telemetry.sent(command)
         with self.write_lock:
             self.serial.write((command + "\n").encode("ascii"))
             self.serial.flush()
@@ -371,6 +377,8 @@ class SerialHeimdallTransport(HeimdallTransport, threading.Thread):
                 self.state.recording_state = "error"
                 self.protocol_errors += 1
             self.state.sequence += 1
+        if self.telemetry is not None:
+            self.telemetry.note(f"audio download {len(payload)} bytes: {error or 'CRC ok'}")
         self.audio_header = None
         self.audio_payload = bytearray()
         self.audio_acknowledged = 0
@@ -480,6 +488,8 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
         validated = validate_command(command, self.grid_capacity)
         if validated.startswith("S,") and int(validated[2:]) >= self.rows * self.columns:
             raise ValueError("sector is outside the active grid")
+        if self.telemetry is not None:
+            self.telemetry.sent(validated)
         self.commands.put(validated)
 
     def _handle_command(self, command: str) -> None:

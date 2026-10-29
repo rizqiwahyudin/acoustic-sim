@@ -36,6 +36,7 @@ from starlette.websockets import WebSocketClose
 from array_theory import theory_cut
 from bank_fit import BankFit
 from heimdall_transport import DeployedProgram, EmulatorHeimdallTransport, SerialHeimdallTransport
+from heimdall_telemetry import TelemetryLog
 from dsp_registry import DspParameterService, plan_writes, setting_order
 from study_runner import StudyRunner
 from heimdall_acoustic import (
@@ -875,6 +876,9 @@ import threading
 
 _heimdall_transport = None
 _heimdall_transport_lock = threading.Lock()
+# Each serial connection writes a telemetry log (heimdall_telemetry.py) unless --no-telemetry-log.
+TELEMETRY_ENV = "HEIMDALL_TELEMETRY_DIR"
+_telemetry_enabled = True
 
 # The Study screen's test runner. While a test runs, only its own connections may command the board.
 _study_runner = StudyRunner()
@@ -1028,8 +1032,20 @@ def _replace_heimdall_transport(transport):
         previous.stop()
         if isinstance(previous, threading.Thread):
             previous.join(timeout=1.0)
+        if getattr(previous, "telemetry", None) is not None:
+            previous.telemetry.close()
     if transport is not None:
+        if _telemetry_enabled and isinstance(transport, SerialHeimdallTransport):
+            try:
+                transport.telemetry = TelemetryLog.create(_telemetry_dir(), transport.transport_name)
+            except OSError as error:
+                print(f"Telemetry log not opened: {error}")
         transport.start()
+
+
+def _telemetry_dir() -> pathlib.Path:
+    configured = os.environ.get(TELEMETRY_ENV)
+    return pathlib.Path(configured) if configured else PROJECT_DIR / "datasets" / "heimdall_telemetry"
 
 
 @app.post("/hw_connect", dependencies=[Depends(_unlocked)])
@@ -1172,7 +1188,24 @@ def hw_status():
         "taper": snapshot.get("taper"),
         "dsp": snapshot.get("dsp"),
         "tables": snapshot.get("tables"),
+        "health": snapshot.get("health"),
+        "telemetry": None if getattr(transport, "telemetry", None) is None else transport.telemetry.status(),
     }
+
+
+class TelemetryMarkRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/hw_telemetry/mark")
+def hw_telemetry_mark(request: TelemetryMarkRequest):
+    """Write a note into the telemetry log, for example 'drone hovering at 4 m'."""
+    with _heimdall_transport_lock:
+        transport = _heimdall_transport
+    if transport is None or getattr(transport, "telemetry", None) is None:
+        raise HTTPException(status_code=409, detail="no telemetry log is open")
+    transport.telemetry.note(f"mark {request.text}")
+    return transport.telemetry.status()
 
 
 @app.get("/hw_ports")
@@ -1974,7 +2007,11 @@ if __name__ == "__main__":
     parser.add_argument("--serial-baud", type=int, default=921600)
     parser.add_argument("--emulator", action="store_true",
                         help="Start the Heimdall firmware emulator")
+    parser.add_argument("--no-telemetry-log", action="store_true",
+                        help=f"Do not log the serial session (default folder: datasets/heimdall_telemetry, "
+                             f"or ${TELEMETRY_ENV})")
     args = parser.parse_args()
+    _telemetry_enabled = not args.no_telemetry_log
 
     if args.emulator:
         _replace_heimdall_transport(EmulatorHeimdallTransport())

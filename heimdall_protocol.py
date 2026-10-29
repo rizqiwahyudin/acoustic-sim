@@ -26,6 +26,7 @@ FIRMWARE_SETTINGS = {
     "tone": (0, 10000, 0),
     "fit": (0, 1, 1),
     "freeze_s": (0, 600, 60),
+    "health": (0, 60000, 1000),
 }
 
 # How the board is turned, seen from behind (beamforming_mathematics/array_mount.py).
@@ -322,6 +323,17 @@ def parse_line(line: str) -> dict[str, Any]:
     if record_type == "TIMING" and len(parts) == 3 and parts[1] == "S":
         return {"type": "timing", "mode": "S", "elapsed_us": _integer(parts[2], "elapsed")}
 
+    if record_type == "HEALTH" and len(parts) == 7:
+        return {
+            "type": "health",
+            "loop_ms": _integer(parts[1], "loop time", maximum=(1 << 64) - 1),
+            "passes": _integer(parts[2], "loop passes"),
+            "max_pass_us": _integer(parts[3], "longest pass"),
+            "bank_maps": _integer(parts[4], "bank maps"),
+            "audio_overruns": _integer(parts[5], "audio overruns"),
+            "console_lost": _integer(parts[6], "lost console bytes"),
+        }
+
     if record_type == "TIMING" and len(parts) == 7 and parts[1] in {"F", "C", "G"}:
         return {
             "type": "timing",
@@ -470,6 +482,10 @@ class HeimdallState:
         self.classes: dict[int, dict[str, Any]] = {}
         self.direction_set: dict[str, Any] | None = None
         self.recording_meta: dict[str, Any] | None = None
+        # HEALTH: the latest record, and the LEVELS,B lines that the board sent but the host did not get.
+        self.health: dict[str, Any] | None = None
+        self.bank_maps_missed = 0
+        self._health_maps: tuple[int, int] | None = None
 
     def apply_line(self, line: str) -> dict[str, Any]:
         record = parse_line(line)
@@ -578,6 +594,12 @@ class HeimdallState:
             self._learn_angles(record)
         elif record_type == "timing":
             self.last_timing = record
+        elif record_type == "health":
+            previous, self.health = self.health, {key: value for key, value in record.items() if key != "type"}
+            if previous is not None and record["loop_ms"] >= previous["loop_ms"] and self._health_maps is not None:
+                board_maps, host_maps = self._health_maps
+                self.bank_maps_missed += max(0, (record["bank_maps"] - board_maps) - (self.bank_maps - host_maps))
+            self._health_maps = (record["bank_maps"], self.bank_maps)
         elif record_type == "dsp_reset":
             self.pending_dsp_reset = {key: record[key] for key in ("code", "elapsed_us")}
         elif record_type == "dsp_load":
@@ -716,6 +738,7 @@ class HeimdallState:
             "classes": {str(channel): dict(item) for channel, item in self.classes.items()},
             "direction_set": deepcopy(self.direction_set),
             "recording_meta": deepcopy(self.recording_meta),
+            "health": None if self.health is None else {**self.health, "bank_maps_missed": self.bank_maps_missed},
         }
 
     def _bank_snapshot(self) -> dict[str, Any] | None:

@@ -391,6 +391,7 @@ class DspParameterService:
         "tone": (0, 10000, 0),
         "fit": (0, 1, 1),
         "freeze_s": (0, 600, 60),
+        "health": (0, 60000, 1000),
     }
 
     def __init__(self, loader=load_registry):

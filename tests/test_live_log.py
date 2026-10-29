@@ -57,6 +57,21 @@ def test_confirm_needs_maps_in_a_row():
     assert detector.update(click)[0] == 24
 
 
+def test_track_before_detect_finds_a_weak_steady_source_that_the_firmware_misses():
+    from tbd_study import TrackDetector
+    rng = np.random.default_rng(3)
+    quiet = (200 * rng.uniform(0.9, 1.1, (400, 49))).astype(np.int64)
+    weak = quiet.copy()
+    weak[100:, 24] = weak[100:, 24] * 14 // 10  # 1.4x: below the firmware's 1.5x
+    firmware, tracked = live_log.Detector(), TrackDetector()
+    assert all(firmware.update(row)[0] == -1 for row in weak)
+    found = [tracked.update(row)[0] for row in weak]
+    assert all(beam == -1 for beam in found[:100])
+    assert sum(beam == 24 for beam in found[100:]) > 200
+    noise_only = TrackDetector()
+    assert all(noise_only.update(row)[0] == -1 for row in quiet)
+
+
 def test_log_round_trip_and_checks(tmp_path):
     levels = maps(count=30)
     run = {"label": "start 1", "start_maps": 10, "maps": list(range(11, 41)), "t": list(np.arange(30) * 0.05),

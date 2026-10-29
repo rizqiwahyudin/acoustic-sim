@@ -44,6 +44,14 @@ To use the GUI without Node at run time, type `npm.cmd run build` one time. Then
 2. Open Hardware. Select the port, or type its name. `Rescan` updates the list.
 3. Select 921600 baud (115200 for a diagnostic firmware build). Click `Connect`.
 
+**Telemetry log.** Each serial connection writes every line from the board and every command to it, with the
+host time, to `datasets/heimdall_telemetry/<date>/<time>_<port>.log` (`HEIMDALL_TELEMETRY_DIR` changes the
+folder; `--no-telemetry-log` switches it off). `/hw_status` gives the file. To mark an event in the log, for
+example during a field test, type
+`Invoke-RestMethod -Method Post http://127.0.0.1:8766/hw_telemetry/mark -ContentType application/json -Body '{"text":"hover 4 m"}'`.
+`scripts/telemetry_log.py <log>` prints a summary (Live runs, `HEALTH`: longest main-loop pass, audio overruns,
+lost `LEVELS,B` lines; marks). `--npz l7_maps.npz` saves the Live runs for `live_log.py`, and `--analyse` replays them.
+
 At connection, the backend sends `I`. The answer of the firmware sets the grid and checks the DSP
 program ([REFERENCE.md section 4.6](../MAX78002/docs/REFERENCE.md#46-records)). The first-start
 checks are in [SETUP.md section 6](../MAX78002/docs/SETUP.md#6-start-and-check).
@@ -133,6 +141,7 @@ profiles, the scenarios and the limits of both models are in
 | `scripts/board_regression.py` | Acceptance checks on the board, and the soak test |
 | `scripts/catalogue.py` | The test list of the Study screen, from the plan and the scripts' parsers (JSON) |
 | `scripts/gui_run.py` | The questions, Stop and DSP edits of a run started from the Study screen |
+| `scripts/telemetry_log.py` | Summary of a telemetry log, and its Live runs for `live_log.py` |
 | `run_comparison.py` | Batch sweep of the acoustic simulator ([docs/SIMULATOR.md](docs/SIMULATOR.md)) |
 
 ## Tests
