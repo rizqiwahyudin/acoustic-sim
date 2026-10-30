@@ -4,8 +4,9 @@ live_log.py, so that the Live replay and its analyses work on any logged session
     python scripts/telemetry_log.py <log> [--npz l7_maps.npz] [--analyse]
         prints the summary; --npz saves the Live runs for live_log.py; --analyse replays them now.
 
-A Live run is the maps from SCAN_STARTED,B to the next SCAN_STOPPED, SCAN_STARTED or READY. HEALTH records
-carry the board's own map count, so the summary also says how many LEVELS,B lines the host did not get.
+A Live run is the maps from SCAN_STARTED,B to the next SCAN_STOPPED or SCAN_STARTED (an I in between does not end
+it: the firmware keeps staring unless it stops). HEALTH records carry the board's own map count, so the summary
+also says how many LEVELS,B lines the host did not get.
 """
 from __future__ import annotations
 
@@ -37,7 +38,7 @@ def entries(path):
 def read_session(path):
     """Live runs (live_log.py format, plus their BANK_FIT records), HEALTH records, notes and counts."""
     runs, health, notes, sent, received, errors = [], [], [], Counter(), Counter(), Counter()
-    run = None
+    run, levels_since_health, missed = None, 0, 0
     for t, direction, text in entries(path):
         if direction == "#":
             notes.append((t, text))
@@ -57,13 +58,18 @@ def read_session(path):
         if kind == "error":
             errors[record.get("reason", "error")] += 1
         if kind == "health":
+            if health and record["loop_ms"] >= health[-1][1]["loop_ms"]:
+                missed += max(0, record["bank_maps"] - health[-1][1]["bank_maps"] - levels_since_health)
             health.append((t, record))
-        elif kind == "scan_started" and record.get("mode") == "B":
+            levels_since_health = 0
+        elif kind == "levels" and record.get("source") == "B":
+            levels_since_health += 1
+        if kind == "scan_started" and record.get("mode") == "B":
             stamp = datetime.fromtimestamp(t).strftime("%H:%M:%S")
             run = {"label": f"start {len(runs) + 1} ({stamp})", "start_maps": 0, "maps": [], "t": [],
                    "levels": [], "targets": [], "fits": [], "events": {}}
             runs.append(run)
-        elif kind in {"scan_started", "scan_stopped", "ready"}:
+        elif kind in {"scan_started", "scan_stopped"}:
             run = None
         elif run is not None and kind == "levels" and record.get("source") == "B":
             run["maps"].append(len(run["maps"]) + 1)
@@ -74,18 +80,13 @@ def read_session(path):
                                    record["beam"], record["second_beam"]))
         elif run is not None and run["maps"] and kind == "bank_fit":
             run["fits"].append((run["maps"][-1], record["azimuth_deg"], record["elevation_deg"], record["quality"]))
-    return {"runs": runs, "health": health, "notes": notes, "sent": sent, "received": received, "errors": errors}
+    return {"runs": runs, "health": health, "notes": notes, "sent": sent, "received": received, "errors": errors,
+            "missed_maps": missed}
 
 
 def missed_maps(session):
-    """LEVELS,B lines that the board sent between the first and last HEALTH record but the host did not get."""
-    health = session["health"]
-    if len(health) < 2:
-        return None
-    first, last = health[0], health[-1]
-    board = last[1]["bank_maps"] - first[1]["bank_maps"]
-    host = sum(1 for run in session["runs"] for t in run["t"] if first[0] < t <= last[0])
-    return max(0, board - host)
+    """LEVELS,B lines that the board sent (HEALTH map count) but the host did not get; None without HEALTH."""
+    return session["missed_maps"] if len(session["health"]) >= 2 else None
 
 
 def summary(session):
