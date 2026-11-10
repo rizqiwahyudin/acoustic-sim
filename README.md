@@ -142,7 +142,29 @@ profiles, the scenarios and the limits of both models are in
 | `scripts/catalogue.py` | The test list of the Study screen, from the plan and the scripts' parsers (JSON) |
 | `scripts/gui_run.py` | The questions, Stop and DSP edits of a run started from the Study screen |
 | `scripts/telemetry_log.py` | Summary of a telemetry log, and its Live runs for `live_log.py` |
+| `scripts/ml_data.py` | Classifier data: list the recordings, align them to the played clip, export labelled 16 kHz windows (split by clip time, session or room; optional mixing), score them with the tonal baseline, and evaluate any scores file |
 | `run_comparison.py` | Batch sweep of the acoustic simulator ([docs/SIMULATOR.md](docs/SIMULATOR.md)) |
+
+## Classifier tools
+
+`heimdall_ml/` holds the parts that every model uses. They do not depend on the model.
+
+| Module | Purpose |
+| --- | --- |
+| `tonal.py` | The firmware tonal detector and 48-to-16 kHz decimator (port of `audio_features.c`; a test checks it against the firmware host test) |
+| `dataset.py` | Reads the backend's recordings (`heimdall-recording-v2`), cuts windows, splits them, writes WAV files and `manifest.csv` |
+| `align.py` | Finds where a recording is in a looping clip (GCC-PHAT), so that train and test hold different parts of the clip |
+| `mix.py` | Mixes a target window over a background window at a set SNR |
+| `evaluate.py` | Detection rate, false alarms per hour and AUC, overall and per group (distance, level, session) |
+
+A model can use the exported folders directly. To compare it with the baseline, write the manifest with a
+`score` column added, and give it to `ml_data.py evaluate`.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\ml_data.py export --out ml_out --source drone.wav --clip audio\drone.wav --test-clip 21 30 --mix 0 6 12
+.\.venv\Scripts\python.exe scripts\ml_data.py baseline --manifest ml_out\manifest.csv --out ml_out\tonal.csv --min-hz 150 --max-hz 260
+.\.venv\Scripts\python.exe scripts\ml_data.py evaluate --scores ml_out\tonal.csv --false-alarms-per-hour 60 --by level,distance_m
+```
 
 ## Tests
 
