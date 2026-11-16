@@ -143,6 +143,7 @@ profiles, the scenarios and the limits of both models are in
 | `scripts/gui_run.py` | The questions, Stop and DSP edits of a run started from the Study screen |
 | `scripts/telemetry_log.py` | Summary of a telemetry log, and its Live runs for `live_log.py` |
 | `scripts/ml_data.py` | Classifier data: list the recordings, align them to the played clip, export labelled 16 kHz windows (split by clip time, session or room; optional mixing), score them with the tonal baseline, and evaluate any scores file |
+| `scripts/canceller_study.py` | Adaptive interference canceller: room simulation (`sim`) and the balcony recordings (`balcony`) |
 | `run_comparison.py` | Batch sweep of the acoustic simulator ([docs/SIMULATOR.md](docs/SIMULATOR.md)) |
 
 ## Classifier tools
@@ -156,6 +157,7 @@ profiles, the scenarios and the limits of both models are in
 | `align.py` | Finds where a recording is in a looping clip (GCC-PHAT), so that train and test hold different parts of the clip |
 | `mix.py` | Mixes a target window over a background window at a set SNR |
 | `evaluate.py` | Detection rate, false alarms per hour and AUC, overall and per group (distance, level, session) |
+| `cancel.py` | Adaptive interference canceller: removes from Ch0 what Ch1 (a beam on the interferer) predicts. Normalised LMS as CMSIS-DSP `arm_lms_norm_f32`, float32, so it can move to the MAX78002 |
 
 A model can use the exported folders directly. To compare it with the baseline, write the manifest with a
 `score` column added, and give it to `ml_data.py evaluate`.
