@@ -5,7 +5,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from heimdall_ml.cancel import CancelConfig, Canceller  # noqa: E402
+from heimdall_ml.cancel import CancelConfig, Canceller, fit_fir  # noqa: E402
 
 RNG = np.random.default_rng(11)
 
@@ -29,6 +29,19 @@ def test_learns_and_removes_a_directional_interferer():
     delayed = np.concatenate([np.zeros(32), leaked(x)])[:len(out)]
     assert power_db(delayed[tail]) - power_db(out[tail]) > 30.0
     assert canceller.learning_blocks == canceller.blocks == len(x) // 256
+
+
+def test_fit_fir_recovers_a_path_for_a_frozen_stage():
+    x = RNG.standard_normal(16000 * 2).astype(np.float32)
+    weights = fit_fir(leaked(x), x, taps=64, delay=32)
+    expected = np.zeros(64)
+    expected[32 + 7:32 + 10] = (0.4, -0.2, 0.08)
+    assert np.max(np.abs(weights - expected)) < 1e-3
+    canceller = Canceller(CancelConfig(gate_ratio_db=None))
+    canceller.weights[:] = weights
+    out, _ = canceller.process(leaked(x), x, learn=False)
+    delayed = np.concatenate([np.zeros(32), leaked(x)])[:len(out)]
+    assert power_db(delayed[256:]) - power_db(out[256:]) > 40.0
 
 
 def test_frozen_coefficients_do_not_change():

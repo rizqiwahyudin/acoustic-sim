@@ -10,6 +10,7 @@ which Ch1 is late.
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.linalg import cho_factor, cho_solve
 
 FLT_EPSILON = np.float32(1.1920929e-07)
 
@@ -110,6 +111,21 @@ class Canceller:
             lines.reference = s_ref[-taps:]
             lines.primary = s_pri[len(s_pri) - delay:]
         return out
+
+
+def fit_fir(primary: np.ndarray, reference: np.ndarray, taps: int, delay: int,
+            loading: float = 1e-4) -> np.ndarray:
+    """Least-squares weights of a frozen stage from a calibration recording: primary delayed by `delay` is
+    about sum_k w[k] reference[n - k] (the Canceller convention). The MCU can solve the same normal equations
+    with arm_mat_cholesky_f32 and the triangular solvers of CMSIS-DSP."""
+    p = np.asarray(primary, dtype=np.float32)
+    r = np.asarray(reference, dtype=np.float32)
+    padded = np.concatenate([np.zeros(taps - 1, np.float32), r])
+    rows = np.lib.stride_tricks.sliding_window_view(padded, taps)[:, ::-1]    # row n: r[n], ..., r[n-taps+1]
+    target = np.concatenate([np.zeros(delay, np.float32), p])[:len(p)]
+    matrix = rows.T @ rows
+    matrix += np.float32(loading * np.trace(matrix) / taps) * np.eye(taps, dtype=np.float32)
+    return cho_solve(cho_factor(matrix), rows.T @ target).astype(np.float32)
 
 
 def cycles_per_second(config: CancelConfig, rate_hz: int = 16000, learning_share: float = 1.0) -> float:
