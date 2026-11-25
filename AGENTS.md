@@ -28,7 +28,8 @@ Setup and starting the backend and the GUI: [README.md](README.md), sections "Se
 - **Firmware copies.** `heimdall_ml/tonal.py` (decimator, tonal detector) and
   `heimdall_ml/model_input.py` (the classifier input) are bit-exact copies of firmware code. Their
   tests use values from the firmware host tests. Do not change them without the firmware side.
-- **Git.** Terse lowercase commit messages, no AI signature. Push only when a person asks. Never
-  touch `main`.
+- **Git.** Terse lowercase commit messages, no AI signature. Push only when a person asks. Work on
+  `testing/characterisation`. Change `main` only when asked, and only as a fast-forward to
+  `testing/characterisation`.
 - **PowerShell.** Chain commands with `;`. Native programs lose embedded double quotes: put
   `python -c` code in a file. The npm test output is garbled: use the `node --test` command above.
