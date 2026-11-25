@@ -142,7 +142,7 @@ profiles, the scenarios and the limits of both models are in
 | `scripts/catalogue.py` | The test list of the Study screen, from the plan and the scripts' parsers (JSON) |
 | `scripts/gui_run.py` | The questions, Stop and DSP edits of a run started from the Study screen |
 | `scripts/telemetry_log.py` | Summary of a telemetry log, and its Live runs for `live_log.py` |
-| `scripts/ml_data.py` | Classifier data: list the recordings, align them to the played clip, export labelled 16 kHz windows (split by clip time, session or room; optional mixing), score them with the tonal baseline, and evaluate any scores file |
+| `scripts/ml_data.py` | Classifier data: list the recordings, align them to the played clip, export labelled 16 kHz windows (split by clip time, session or room; optional mixing), make the CNN's int8 input (`tensors`), score them with the tonal baseline, and evaluate any scores file |
 | `scripts/canceller_study.py` | Adaptive interference canceller: room simulation (`sim`), the conference hall with a visitor and a crowd, references without the drone and fixed nulls (`conference`), and the balcony recordings (`balcony`) |
 | `run_comparison.py` | Batch sweep of the acoustic simulator ([docs/SIMULATOR.md](docs/SIMULATOR.md)) |
 
@@ -158,6 +158,7 @@ profiles, the scenarios and the limits of both models are in
 | `mix.py` | Mixes a target window over a background window at a set SNR |
 | `evaluate.py` | Detection rate, false alarms per hour and AUC, overall and per group (distance, level, session) |
 | `cancel.py` | Adaptive interference canceller: removes from Ch0 what Ch1 predicts. Normalised LMS as CMSIS-DSP `arm_lms_norm_f32`, float32, and a least-squares fit for a frozen calibration stage (`arm_mat_cholesky_f32`), so it can move to the MAX78002 |
+| `model_input.py` | The CNN model input exactly as the firmware builds it (`classifier_input.c`): the last 16,384 samples at 16 kHz, int8, as 128 channels x 128 steps. A test shares checksums with the firmware host test |
 
 A model can use the exported folders directly. To compare it with the baseline, write the manifest with a
 `score` column added, and give it to `ml_data.py evaluate`.
@@ -166,6 +167,15 @@ A model can use the exported folders directly. To compare it with the baseline, 
 .\.venv\Scripts\python.exe scripts\ml_data.py export --out ml_out --source drone.wav --clip audio\drone.wav --test-clip 21 30 --mix 0 6 12
 .\.venv\Scripts\python.exe scripts\ml_data.py baseline --manifest ml_out\manifest.csv --out ml_out\tonal.csv --min-hz 150 --max-hz 260
 .\.venv\Scripts\python.exe scripts\ml_data.py evaluate --scores ml_out\tonal.csv --false-alarms-per-hour 60 --by level,distance_m
+```
+
+For a model on the MAX78002 CNN accelerator, export 1.024 s windows and make the int8 arrays (one
+`.npz` for each split). The procedure from the recordings to the board is in
+[CLASSIFIER.md](../MAX78002/docs/CLASSIFIER.md).
+
+```powershell
+.\.venv\Scripts\python.exe scripts\ml_data.py export --out ml_cnn --length 1.024 --source drone.wav --clip audio\drone.wav --test-clip 21 30
+.\.venv\Scripts\python.exe scripts\ml_data.py tensors --manifest ml_cnn\manifest.csv --out ml_cnn\tensors
 ```
 
 ## Tests
@@ -177,6 +187,7 @@ cd app; npm.cmd test; npm.cmd run build
 
 ## Documents
 
+- [AGENTS.md](AGENTS.md): rules and commands for AI coding agents.
 - [docs/SIMULATOR.md](docs/SIMULATOR.md): the acoustic simulator and the emulators, what they
   model and how far to trust them.
 - `docs/archive/`: the early geometry comparison study and old plans, kept for reference.

@@ -31,3 +31,7 @@ Thumbs.db
 
 # Byte-compiled / optimized
 *.so
+
+# Classifier data exported by scripts/ml_data.py: recordings never go into this public repository
+ml_out/
+ml_cnn/

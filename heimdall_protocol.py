@@ -27,10 +27,14 @@ FIRMWARE_SETTINGS = {
     "fit": (0, 1, 1),
     "freeze_s": (0, 600, 60),
     "health": (0, 60000, 1000),
+    "classify": (0, 10000, 0),
 }
 
 # How the board is turned, seen from behind (beamforming_mathematics/array_mount.py).
 ARRAY_MOUNTS = ("upright", "cw90", "180", "ccw90")
+
+# MODEL record states (MAX78002 classifier.c): ready, or why the built-in model does not run.
+MODEL_STATES = ("ready", "off", "timer_tmr0", "clock", "consumer")
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,13 @@ def _number(text: str, name: str) -> float:
         raise ProtocolError(f"{name} must be numeric") from error
     if not math.isfinite(value):
         raise ProtocolError(f"{name} must be finite")
+    return value
+
+
+def _fraction(text: str, name: str) -> float:
+    value = _number(text, name)
+    if not 0.0 <= value <= 1.0:
+        raise ProtocolError(f"{name} must be between 0 and 1")
     return value
 
 
@@ -257,9 +268,35 @@ def parse_line(line: str) -> dict[str, Any]:
             "level_db": _number(parts[5], "level"),
         }
 
-    if record_type == "CLASS" and len(parts) == 4 and parts[2]:
-        return {"type": "class", "channel": _integer(parts[1], "channel", 0, 1),
-                "label": parts[2], "confidence": _number(parts[3], "confidence")}
+    if record_type == "CLASS" and len(parts) == 7 and parts[2]:
+        return {
+            "type": "class",
+            "channel": _integer(parts[1], "channel", 0, 1),
+            "label": parts[2],
+            "confidence": _fraction(parts[3], "confidence"),
+            # The sector Ch0 held for the whole window; None when the beam moved during it.
+            "sector": None if parts[4] == "-1" else _integer(parts[4], "sector", 0, 65535),
+            "inference_us": _integer(parts[5], "inference time"),
+            # None when the model has no drone output (MODEL_DRONE_CLASS -1).
+            "drone_probability": None if parts[6] == "-1" else _fraction(parts[6], "drone probability"),
+        }
+
+    if record_type == "MODEL" and parts[1:] == ["none"]:
+        return {"type": "model", "name": None, "state": "none", "samples": 0, "labels": []}
+
+    if record_type == "MODEL" and len(parts) >= 6 and parts[1]:
+        if parts[2] not in MODEL_STATES:
+            raise ProtocolError("unknown model state")
+        classes = _integer(parts[4], "model classes", 1, 1024)
+        if len(parts) != 5 + classes or not all(parts[5:]):
+            raise ProtocolError("label count does not match the model classes")
+        return {
+            "type": "model",
+            "name": parts[1],
+            "state": parts[2],
+            "samples": _integer(parts[3], "model input samples", 1, 16384),
+            "labels": parts[5:],
+        }
 
     if record_type == "DIRSET" and len(parts) == 7:
         return {
@@ -480,6 +517,8 @@ class HeimdallState:
         self.map_hash: str | None = None
         self.tones: dict[int, dict[str, Any]] = {}
         self.classes: dict[int, dict[str, Any]] = {}
+        # The MODEL record: the classifier built into the firmware (None until the board reports it).
+        self.model: dict[str, Any] | None = None
         self.direction_set: dict[str, Any] | None = None
         self.recording_meta: dict[str, Any] | None = None
         # HEALTH: the latest record, and the LEVELS,B lines that the board sent but the host did not get.
@@ -564,6 +603,8 @@ class HeimdallState:
             self.tones[record["channel"]] = {k: v for k, v in record.items() if k != "type"}
         elif record_type == "class":
             self.classes[record["channel"]] = {k: v for k, v in record.items() if k != "type"}
+        elif record_type == "model":
+            self.model = {k: v for k, v in record.items() if k != "type"}
         elif record_type == "dirset":
             self.direction_set = {k: v for k, v in record.items() if k != "type"}
         elif record_type == "recording_meta":
@@ -736,6 +777,7 @@ class HeimdallState:
             "map_hash": self.map_hash,
             "tones": {str(channel): dict(tone) for channel, tone in self.tones.items()},
             "classes": {str(channel): dict(item) for channel, item in self.classes.items()},
+            "model": deepcopy(self.model),
             "direction_set": deepcopy(self.direction_set),
             "recording_meta": deepcopy(self.recording_meta),
             "health": None if self.health is None else {**self.health, "bank_maps_missed": self.bank_maps_missed},

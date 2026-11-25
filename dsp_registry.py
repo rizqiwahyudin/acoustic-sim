@@ -371,6 +371,10 @@ def setting_order(current: dict[str, int], changes: dict[str, int]) -> list[tupl
     return sorted(changes.items(), key=lambda item: item[0] != first)
 
 
+class ModelUnavailableError(ValueError):
+    """classify above 0 while the firmware has no ready model (the firmware answers ERR,SET,MODEL)."""
+
+
 class DspParameterService:
     """Parameter memory and settings per transport.
 
@@ -392,6 +396,7 @@ class DspParameterService:
         "fit": (0, 1, 1),
         "freeze_s": (0, 600, 60),
         "health": (0, 60000, 1000),
+        "classify": (0, 10000, 0),
     }
 
     def __init__(self, loader=load_registry):
@@ -588,6 +593,8 @@ class DspParameterService:
             raise ValueError(f"unknown setting {key!r}")
         minimum, maximum, _ = self.SETTINGS[key]
         setting = int(round(float(value)))
+        if key == "classify" and setting > 0 and (transport.snapshot().get("model") or {}).get("state") != "ready":
+            raise ModelUnavailableError("classify needs a model in the firmware: the board reports no ready model")
         if not minimum <= setting <= maximum:
             raise ValueError(f"{key} must be between {minimum} and {maximum}")
         current = self.settings(transport)

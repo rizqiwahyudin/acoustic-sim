@@ -500,6 +500,11 @@ def test_emulator_study_commands_round_trip_through_protocol():
             time.sleep(0.005)
         assert emulator.snapshot()["map_hash"] == "0123456789abcdef"
         assert emulator.request("SET,window_us,8000", {"set_ok"})["value"] == 8000
+        # No model in the emulator: it answers as firmware built without one.
+        assert emulator.snapshot()["model"]["state"] == "none"
+        with pytest.raises(RuntimeError, match="MODEL"):
+            emulator.request("SET,classify,500", {"set_ok"})
+        assert emulator.request("SET,classify,0", {"set_ok"})["value"] == 0
         assert emulator.request("PW,100,00800000", {"pw_ok"})["count"] == 1
         assert emulator.request("PR,100,1", {"pv"})["words"] == [1 << 23]
         direction_set = emulator.request("DG,-4000,4000,3,-3000,3000,2", {"dirset"})
@@ -882,14 +887,35 @@ def test_compact_scan_map_fills_every_sector():
 def test_tone_class_dirset_and_recording_metadata():
     state = _configured_state()
     state.apply_line("TONE,0,1875,123,6,-213")
-    state.apply_line("CLASS,1,drone,0.87")
+    state.apply_line("CLASS,0,drone,0.870,12,8123,0.870")
     state.apply_line("DIRSET,2,3,264,264,0,61234")
     state.apply_line("REC_META,4,2,12")
     snapshot = state.snapshot()
     assert snapshot["tones"]["0"]["harmonics"] == 6
-    assert snapshot["classes"]["1"]["label"] == "drone"
+    assert snapshot["classes"]["0"]["label"] == "drone"
     assert snapshot["direction_set"]["verified"] == 264
     assert snapshot["recording_meta"] is not None
-    for line in ("TONE,2,1,1,1,1", "DIRSET,2,3,1,1,0", "PW_OK,1,6", "MAP"):
+    for line in ("TONE,2,1,1,1,1", "DIRSET,2,3,1,1,0", "PW_OK,1,6", "MAP", "CLASS,1,drone,0.87"):
+        with pytest.raises(ProtocolError):
+            parse_line(line)
+
+
+def test_classifier_model_and_class_records():
+    state = _configured_state()
+    assert state.snapshot()["model"] is None
+    state.apply_line("MODEL,none")
+    assert state.snapshot()["model"] == {"name": None, "state": "none", "samples": 0, "labels": []}
+    state.apply_line("MODEL,drone-v1,ready,16384,2,drone,not_drone")
+    assert state.snapshot()["model"] == {"name": "drone-v1", "state": "ready", "samples": 16384,
+                                         "labels": ["drone", "not_drone"]}
+    state.apply_line("CLASS,0,drone,0.912,24,7850,0.912")
+    assert state.snapshot()["classes"]["0"] == {"channel": 0, "label": "drone", "confidence": 0.912, "sector": 24,
+                                                "inference_us": 7850, "drone_probability": 0.912}
+    # The beam moved during the window, and the model has no drone output.
+    record = parse_line("CLASS,0,yes,0.500,-1,7850,-1")
+    assert record["sector"] is None and record["drone_probability"] is None
+    for line in ("MODEL,drone-v1,ready,16384,3,drone,not_drone", "MODEL,drone-v1,broken,16384,1,drone",
+                 "MODEL,drone-v1,ready,16384,2,drone,", "CLASS,0,drone,1.5,3,100,0.5",
+                 "CLASS,0,drone,0.5,-2,100,0.5"):
         with pytest.raises(ProtocolError):
             parse_line(line)

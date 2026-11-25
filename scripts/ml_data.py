@@ -1,14 +1,17 @@
-"""Classifier data from the Heimdall recordings: list, align, export, baseline and evaluate.
+"""Classifier data from the Heimdall recordings: list, align, export, baseline, evaluate and tensors.
 
     python scripts/ml_data.py list
     python scripts/ml_data.py align --clip audio/drone.wav
     python scripts/ml_data.py export --out ml_out --source drone.wav --clip audio/drone.wav --test-clip 21 30
     python scripts/ml_data.py baseline --manifest ml_out/manifest.csv --out ml_out/tonal.csv --min-hz 150 --max-hz 260
     python scripts/ml_data.py evaluate --scores ml_out/tonal.csv --false-alarms-per-hour 60 --by level,distance_m
+    python scripts/ml_data.py export --out ml_cnn --length 1.024 --source drone.wav --clip audio/drone.wav --test-clip 21 30
+    python scripts/ml_data.py tensors --manifest ml_cnn/manifest.csv --out ml_cnn/tensors
 
 Recordings come from the backend's dataset folder (HEIMDALL_DATASET_DIR or datasets/heimdall_recordings).
 `evaluate` reads any scores file with the manifest columns plus a `score` column, so every model is scored
-the same way.
+the same way. `tensors` turns exported windows into the CNN's int8 input, built as the firmware builds it
+(heimdall_ml.model_input, MAX78002/docs/CLASSIFIER.md).
 """
 import argparse
 import csv
@@ -19,7 +22,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from heimdall_ml import align, dataset, evaluate, mix, tonal  # noqa: E402
+from heimdall_ml import align, dataset, evaluate, mix, model_input, tonal  # noqa: E402
 
 
 def _is_target(recording, args) -> bool:
@@ -148,6 +151,40 @@ def command_evaluate(args):
     print(evaluate.report(result))
 
 
+def command_tensors(args):
+    """<out>/<split>.npz: x (N, 128, 128) int8 [channel, step], y class index, classes, files, scale, gain."""
+    rows = dataset.read_manifest(Path(args.manifest))
+    if not rows:
+        raise SystemExit("the manifest has no windows")
+    classes = [name for name in (args.classes or f"{args.target},not_{args.target}").split(",") if name]
+    if len(classes) < 2:
+        raise SystemExit("--classes needs two or more names")
+    base = Path(args.manifest).parent
+    splits = {}
+    for row in rows:
+        samples, rate = dataset.read_wav(base / row["file"])
+        if rate != tonal.RATE_HZ:
+            raise SystemExit(f"{row['file']}: {rate} Hz, but the model input is {tonal.RATE_HZ} Hz")
+        if len(samples) < model_input.KWS20_SAMPLES:
+            raise SystemExit(f"{row['file']}: {len(samples)} samples, but the model takes "
+                             f"{model_input.KWS20_SAMPLES}: export with --length 1.024")
+        window = model_input.window_int8(samples[:, 0], args.scale, args.gain)
+        split = splits.setdefault(row["split"], {"x": [], "y": [], "files": []})
+        split["x"].append(model_input.kws20_tensor(window))
+        # A label that is not in --classes goes to the last class.
+        split["y"].append(classes.index(row["label"]) if row["label"] in classes else len(classes) - 1)
+        split["files"].append(row["file"])
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, split in splits.items():
+        path = out / f"{name}.npz"
+        y = np.array(split["y"], dtype=np.int64)
+        np.savez_compressed(path, x=np.stack(split["x"]), y=y, classes=np.array(classes),
+                            files=np.array(split["files"]), scale=args.scale, gain=args.gain)
+        counts = ", ".join(f"{label} {int(np.sum(y == index))}" for index, label in enumerate(classes))
+        print(f"{name}: {len(y)} windows ({counts}): {path}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", type=Path, help="dataset folder (default: the backend's)")
@@ -185,9 +222,17 @@ def main(argv=None):
     group.add_argument("--threshold", type=float)
     group.add_argument("--false-alarms-per-hour", type=float)
     p.add_argument("--by", default="", help="comma-separated manifest columns to break down by")
+    p = commands.add_parser("tensors", help="exported windows as the CNN's int8 input (one .npz per split)")
+    p.add_argument("--manifest", required=True)
+    p.add_argument("--out", required=True, help="folder for <split>.npz")
+    p.add_argument("--classes", help="network outputs in order, comma-separated (default <target>,not_<target>); "
+                   "other labels go to the last class")
+    p.add_argument("--scale", choices=model_input.SCALES, default="gain",
+                   help="int16 to int8 as MODEL_INPUT_SCALE in model_config.h (default gain)")
+    p.add_argument("--gain", type=float, default=1.0, help="MODEL_INPUT_GAIN for --scale gain (default 1.0)")
     args = parser.parse_args(argv)
     {"list": command_list, "align": command_align, "export": command_export, "baseline": command_baseline,
-     "evaluate": command_evaluate}[args.command](args)
+     "evaluate": command_evaluate, "tensors": command_tensors}[args.command](args)
 
 
 if __name__ == "__main__":

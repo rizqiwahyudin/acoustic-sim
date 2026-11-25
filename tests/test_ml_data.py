@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import ml_data  # noqa: E402
-from heimdall_ml import align, dataset, evaluate, mix  # noqa: E402
+from heimdall_ml import align, dataset, evaluate, mix, model_input  # noqa: E402
 
 CLIP_RATE = 16000
 CLIP_S = 6.0
@@ -169,3 +169,25 @@ def test_command_line_export_baseline_evaluate(dataset_root, tmp_path, capsys):
     ml_data.main(["evaluate", "--scores", str(scores), "--false-alarms-per-hour", "60", "--by", "level"])
     printed = capsys.readouterr().out
     assert "detection" in printed and "by level:" in printed
+
+
+def test_command_line_tensors_are_the_firmware_input(dataset_root, tmp_path, capsys):
+    root, _, _ = dataset_root
+    out = tmp_path / "cnn"
+    ml_data.main(["--root", str(root), "export", "--out", str(out), "--length", "1.024", "--hop", "1.0"])
+    ml_data.main(["tensors", "--manifest", str(out / "manifest.csv"), "--out", str(out / "tensors")])
+    assert "train:" in capsys.readouterr().out
+    train = np.load(out / "tensors" / "train.npz")
+    assert train["x"].shape[1:] == (128, 128) and train["x"].dtype == np.int8
+    assert list(train["classes"]) == ["drone", "not_drone"] and str(train["scale"]) == "gain"
+    rows = {row["file"]: row for row in dataset.read_manifest(out / "manifest.csv")}
+    for index in (0, len(train["y"]) - 1):
+        row = rows[str(train["files"][index])]
+        samples, _ = dataset.read_wav(out / row["file"])
+        expected = model_input.kws20_tensor(model_input.window_int8(samples[:, 0]))
+        assert np.array_equal(train["x"][index], expected)
+        assert train["y"][index] == ["drone", "not_drone"].index(row["label"])
+    short = tmp_path / "short"
+    ml_data.main(["--root", str(root), "export", "--out", str(short), "--length", "1.0", "--hop", "1.0"])
+    with pytest.raises(SystemExit, match="1.024"):
+        ml_data.main(["tensors", "--manifest", str(short / "manifest.csv"), "--out", str(short / "tensors")])

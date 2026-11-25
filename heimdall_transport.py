@@ -15,7 +15,7 @@ from typing import Any
 import zlib
 
 from bank_fit import BankFit, BankFitStream
-from dsp_registry import DspParameterService, checksum
+from dsp_registry import DspParameterService, ModelUnavailableError, checksum
 from heimdall_bank import BankTracker, FREEZE_S as BANK_FREEZE_S, LOST_MAPS as BANK_LOST_MAPS, PERIOD_S as BANK_PERIOD_S
 from heimdall_protocol import FIRMWARE_SETTINGS, HeimdallState, ProtocolError
 
@@ -556,6 +556,8 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
                 self.parameter_service.set(self, key, int(value))
             except RuntimeError:
                 self.apply_line("ERR,SET,BUSY")
+            except ModelUnavailableError:
+                self.apply_line("ERR,SET,MODEL")
             except (PermissionError, ValueError):
                 self.apply_line("ERR,SET,RANGE")
         elif command.startswith("PW,"):
@@ -608,6 +610,8 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
         self.apply_line("ELEVATION," + str(self.rows) + "," + ",".join(_format_angle(v) for v in self.elevation_deg))
         for line in self.program.configuration_lines():
             self.apply_line(line)
+        # The emulator has no CNN model, as firmware built without one.
+        self.apply_line("MODEL,none")
         if include_boot:
             for line in self.program.boot_lines():
                 self.apply_line(line)
