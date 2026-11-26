@@ -28,6 +28,7 @@ FIRMWARE_SETTINGS = {
     "freeze_s": (0, 600, 60),
     "health": (0, 60000, 1000),
     "classify": (0, 10000, 0),
+    "cfar": (0, 200, 0),
 }
 
 # How the board is turned, seen from behind (beamforming_mathematics/array_mount.py).

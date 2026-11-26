@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from bank_fit import BankFit
-from heimdall_bank import FRACTION_BITS, BankTracker, LOST_MAPS
+from heimdall_bank import FRACTION_BITS, FREEZE_MAPS, BankTracker, LOST_MAPS
 from heimdall_protocol import HeimdallState, ProtocolError, parse_line
 from heimdall_transport import DeployedProgram, EmulatorHeimdallTransport, validate_command
 
@@ -194,6 +194,80 @@ def test_emulator_stare_takes_the_freeze_from_the_settings():
     emulator.parameter_service._settings["freeze_s"] = 0
     emulator._handle_command("B")
     assert emulator.bank_tracker.freeze_maps == 0
+
+
+# The CFAR sequence of MAX78002/tests/test_beam_bank.c and the checksums that the firmware test expects at z10 70.
+CFAR_MAPS, CFAR_SOURCE_MAP, CFAR_LOUD_MAP = 900, 500, 700
+CFAR_CHECKSUMS = {7: 4099676683, 5: 2474286150}
+
+
+def cfar_levels(beams):
+    """Noise of +-10 % per beam and +-5 % per map, a steady source x1.25 from map 500, a loud source from map 700."""
+    state = 12345
+
+    def draw():
+        nonlocal state
+        state = (state * 1664525 + 1013904223) & 0xFFFFFFFF
+        return state >> 8
+
+    for index in range(CFAR_MAPS):
+        common = 1000 + draw() % 101 - 50
+        levels = []
+        for beam in range(beams):
+            level = (300 + beam * 37 % 200) * (900 + draw() % 201) // 1000 * common // 1000
+            if index >= CFAR_SOURCE_MAP and beam == beams // 2 + 1:
+                level = level * 5 // 4
+            if index >= CFAR_LOUD_MAP and beam == 0:
+                level *= 4
+            levels.append(level)
+        yield levels
+
+
+def cfar_run(size, z10):
+    beams = size * size
+    zeros = [0.0] * beams
+    bank = BankTracker(size, size, zeros, zeros, zeros[:size], zeros[:size], freeze_maps=FREEZE_MAPS, cfar_z10=z10)
+    checksum, results = 0, []
+    for levels in cfar_levels(beams):
+        result = bank.update(levels)
+        n = len(result.beams)
+        value = int(result.cfar) + 2 * n + 8 * (result.beams[0] + 1 if n else 0) + 512 * (
+            result.beams[1] + 1 if n > 1 else 0)
+        checksum = (checksum * 31 + value) & 0xFFFFFFFF
+        results.append(result)
+    if bank.cfar is not None:
+        for word in [bank.cfar.var, *bank.cfar.long, *bank.cfar.deviation]:
+            checksum = (checksum * 31 + (word & 0xFFFFFFFF)) & 0xFFFFFFFF
+    return checksum, results
+
+
+@pytest.mark.parametrize("size", [7, 5])
+def test_cfar_finds_a_steady_source_below_the_1_5x_rule(size):
+    source = size * size // 2 + 1
+    checksum, results = cfar_run(size, 70)
+    assert checksum == CFAR_CHECKSUMS[size]
+    assert not any(r.beams for r in results[300:CFAR_SOURCE_MAP])
+    first = next(i for i, r in enumerate(results) if r.cfar)
+    assert CFAR_SOURCE_MAP <= first < CFAR_SOURCE_MAP + 10
+    weak = results[CFAR_SOURCE_MAP + 100:CFAR_LOUD_MAP]
+    assert all(r.cfar and r.beams[0] == source for r in weak)
+    # The 1.5x rule comes first: the loud source is never a CFAR target.
+    assert all(r.beams and r.beams[0] == 0 and not r.cfar for r in results[CFAR_LOUD_MAP + 1:])
+
+
+def test_cfar_off_finds_nothing_below_the_1_5x_rule():
+    _, results = cfar_run(7, 0)
+    assert not any(r.cfar for r in results)
+    assert not any(r.beams for r in results[:CFAR_LOUD_MAP])
+
+
+def test_emulator_stare_takes_the_cfar_from_the_settings():
+    emulator = ScriptedBankEmulator(bank_program())
+    emulator._handle_command("B")
+    assert emulator.bank_tracker.cfar is None
+    emulator.parameter_service._settings["cfar"] = 70
+    emulator._handle_command("B")
+    assert emulator.bank_tracker.cfar.z10 == 70
 
 
 def test_target_lost_clears_the_bank_target_and_fit():

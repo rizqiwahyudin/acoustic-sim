@@ -1,10 +1,11 @@
 """Live (bank) logs: save, load, replay the firmware's detector with other settings, and analyse.
 
-    python scripts/live_log.py <folder> [old|nofreeze] [--speaker AZ EL]
+    python scripts/live_log.py <folder> [old|nofreeze] [--speaker AZ EL] [--cfar Z10]
         analyses l7_maps.npz and/or l5_maps.npz in the folder; writes live_log.json. 'old': the log was made with
         the detector before 2026-10-23 (integer backgrounds, no level floor); 'nofreeze': before 2026-10-27 (no
         freeze_s). --speaker: the speaker's direction
-        (deg), to score the firmware target and the pattern fit (bank_fit.py) against it.
+        (deg), to score the firmware target and the pattern fit (bank_fit.py) against it. --cfar: the board's cfar
+        setting when the log was made (tenths of a standard deviation; 0 or absent = off).
 
 A run is the maps of one Live start (B). The replay is exact only when the log has every map from the start (the
 first map primes the backgrounds); the analysis checks this against the targets that the board reported.
@@ -23,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bank_fit import BankFit, BankFitStream  # noqa: E402
 from heimdall_acoustic import default_contract_path  # noqa: E402
-from heimdall_bank import FREEZE_MAPS  # noqa: E402
+from heimdall_bank import FREEZE_MAPS, BankCfar  # noqa: E402
 
 ROWS = COLUMNS = 7
 MAP_S = 0.05  # HEIMDALL_BANK_PERIOD_US
@@ -39,6 +40,7 @@ SETTINGS = {
     "ratio 2x": {"ratio": (2, 1)},
     "2 maps in a row": {"confirm": 2},
     "slow rise (shift 9 up, 5 down)": {"rise_shift": 9},
+    "CFAR z 7.0 (cfar 70)": {"cfar": 70},
 }
 
 
@@ -72,14 +74,16 @@ class Detector:
     (NO_FREEZE: before 2026-10-27, OLD_FIRMWARE: before 2026-10-23). frac_bits: fraction bits of the backgrounds;
     floor: a level must be above it; freeze_maps: a beam above its background keeps it this many maps in a row;
     confirm reports a target only when a candidate was found in that many maps in a row, each within one row and
-    column of the one before; rise_shift makes a quiet beam's background rise more slowly than it falls."""
+    column of the one before; rise_shift makes a quiet beam's background rise more slowly than it falls; cfar (tenths
+    of a standard deviation, 0 = off) adds the firmware's bank CFAR for maps without a candidate."""
 
     def __init__(self, ratio=(3, 2), shift=5, held_shift=9, frac_bits=8, confirm=1, rise_shift=None, floor=4,
-                 freeze_maps=FREEZE_MAPS):
+                 freeze_maps=FREEZE_MAPS, cfar=0):
         self.num, self.den = ratio
         self.shift, self.held_shift, self.frac, self.confirm = shift, held_shift, frac_bits, confirm
         self.rise_shift = shift if rise_shift is None else rise_shift
         self.floor, self.freeze_maps = floor, freeze_maps
+        self.cfar = BankCfar(ROWS, COLUMNS, cfar, freeze_maps) if cfar > 0 else None
         self.background = self.held = None
         self.streak, self.last = 0, -1
 
@@ -90,11 +94,14 @@ class Detector:
     def update(self, levels):
         """One map; returns (best beam or -1 when no target is reported, the candidates' raw best beam or -1)."""
         levels = np.asarray(levels, np.int64)
+        median = int(np.sort(levels)[len(levels) // 2])
         if self.background is None:
             self.background = levels << self.frac
             self.held = np.zeros(len(levels), np.int64)
+            if self.cfar is not None:
+                self.cfar.prime([int(v) for v in levels], median)
             return -1, -1
-        field = int(np.sort(levels)[len(levels) // 2]) << self.frac
+        field = median << self.frac
         above = self.above(levels, self.background) & self.above(levels, field)
         grid = levels.reshape(ROWS, COLUMNS)
         best, best_ratio = -1, None
@@ -106,6 +113,10 @@ class Detector:
             ratio = Fraction(int(levels[beam]), max(1, int(self.background[beam]) >> self.frac))
             if best_ratio is None or ratio > best_ratio:
                 best, best_ratio = int(beam), ratio
+        if self.cfar is not None:
+            hits = self.cfar.update([int(v) for v in levels], median)
+            if best < 0 and hits:
+                best = hits[0]
         difference = (levels << self.frac) - self.background
         shift = np.where(above, self.held_shift, np.where(difference > 0, self.rise_shift, self.shift))
         step = np.where(difference >= 0, difference >> shift, -((-difference) >> shift))
@@ -315,5 +326,10 @@ if __name__ == "__main__":
     parser.add_argument("old", nargs="?", choices=["old", "nofreeze"],
                         help="the log is from firmware before 23 Oct (old) or before 27 Oct (nofreeze)")
     parser.add_argument("--speaker", type=float, nargs=2, metavar=("AZ", "EL"))
+    parser.add_argument("--cfar", type=int, default=0, metavar="Z10",
+                        help="the board's cfar setting when the log was made (0 = off)")
     args = parser.parse_args()
-    analyse(args.folder, {"old": OLD_FIRMWARE, "nofreeze": NO_FREEZE}.get(args.old, {}), args.speaker)
+    firmware = dict({"old": OLD_FIRMWARE, "nofreeze": NO_FREEZE}.get(args.old, {}))
+    if args.cfar:
+        firmware["cfar"] = args.cfar
+    analyse(args.folder, firmware, args.speaker)

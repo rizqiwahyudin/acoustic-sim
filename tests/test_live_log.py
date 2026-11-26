@@ -36,6 +36,21 @@ def test_default_replay_is_the_firmware_tracker(settings):
     assert [int(v) for v in detector.background] == tracker.background
 
 
+def test_cfar_replay_is_the_firmware_tracker():
+    zeros = [0.0] * 49
+    tracker = BankTracker(7, 7, zeros, zeros, zeros[:7], zeros[:7], cfar_z10=60)
+    detector = live_log.Detector(cfar=60)
+    levels = maps(count=1000)
+    levels[500:, 17] = levels[500:, 17] * 5 // 4  # a steady source below the 1.5x rule
+    found = 0
+    for row in levels:
+        expected = tracker.update([int(v) for v in row])
+        best = detector.update(row)[0]
+        assert best == (expected.beams[0] if expected.beams else -1)
+        found += expected.cfar and best == 17
+    assert found > 0
+
+
 def test_integer_background_stops_short_of_the_level():
     """The old firmware's shift-5 step is zero within 31 words; fraction bits let the background reach the level."""
     whole, fine = live_log.Detector(**live_log.OLD_FIRMWARE), live_log.Detector()

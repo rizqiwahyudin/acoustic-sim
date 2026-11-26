@@ -521,6 +521,7 @@ class EmulatorHeimdallTransport(HeimdallTransport, threading.Thread):
                 list(self.program.bank_azimuth_deg), list(self.program.bank_elevation_deg),
                 self.azimuth_deg, self.elevation_deg,
                 freeze_maps=round(settings.get("freeze_s", BANK_FREEZE_S) / BANK_PERIOD_S),
+                cfar_z10=int(settings.get("cfar", 0)),
             )
             fit_on = settings.get("fit", 1) == 1
             self.bank_fit_stream = BankFitStream(self.bank_fit) if fit_on and self.bank_fit else None

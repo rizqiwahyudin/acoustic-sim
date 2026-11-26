@@ -397,6 +397,7 @@ class DspParameterService:
         "freeze_s": (0, 600, 60),
         "health": (0, 60000, 1000),
         "classify": (0, 10000, 0),
+        "cfar": (0, 200, 0),
     }
 
     def __init__(self, loader=load_registry):

@@ -340,6 +340,8 @@ export class MeasurementPanel {
       return this.inputs[key];
     };
     this.inputs = {};
+    this.cfar = h('input', {class: 'input input--mono input--sm', type: 'number', min: 0, max: 20, step: 0.5,
+      style: {width: '96px'}});
     this.apply = h('button', {type: 'button', class: 'btn btn--sm', onClick: async () => {
       this.apply.disabled = true;
       try {
@@ -360,11 +362,20 @@ export class MeasurementPanel {
       h('div', {class: 'form'}, h('span', {class: 'pick', title: 'Where Live steers the beam (Ch0): the pattern fit of the bank map, '
         + 'or the peak bank beam'}, 'Live aim', this.aim.el),
       h('label', {title: 'Live: a beam above its background keeps that background this long, then adapts slowly (0 = off)'},
-        'Freeze', input('freeze_s', 0, 600, 10), 's')),
+        'Freeze', input('freeze_s', 0, 600, 10), 's'),
+      h('label', {title: 'Live: also report steady sounds too weak for the 1.5x rule, when a beam rises this many '
+        + 'standard deviations above its own average (0 = off; 7 gave no false targets in the logged rooms)'},
+        'CFAR z', this.cfar)),
       h('p', {class: 'note'}, 'Settings change only while the device is stopped.'));
     this.inputs.freeze_s.addEventListener('change', async () => {
       this.inputs.freeze_s.disabled = true;
       try { await session.setSetting('freeze_s', Number(this.inputs.freeze_s.value), 'Live freeze'); }
+      finally { this.render(); }
+    });
+    this.cfar.addEventListener('change', async () => {
+      this.cfar.disabled = true;
+      // The firmware takes tenths of a standard deviation.
+      try { await session.setSetting('cfar', Math.round(Number(this.cfar.value) * 10), 'Live CFAR'); }
       finally { this.render(); }
     });
   }
@@ -380,6 +391,8 @@ export class MeasurementPanel {
       if (document.activeElement !== input && Number.isFinite(settings[key])) input.value = settings[key];
       input.disabled = !idle;
     }
+    if (document.activeElement !== this.cfar && Number.isFinite(settings.cfar)) this.cfar.value = settings.cfar / 10;
+    this.cfar.disabled = !idle || settings.cfar === undefined;
     this.apply.disabled = !idle;
   }
 }
